@@ -41,11 +41,19 @@ Two details it gets right, because both were bugs first:
 
 ```sh
 brew install trivial-corp/tap/workmux            # macOS
+npx workmux                                      # no install at all
 curl -fsSL https://raw.githubusercontent.com/trivial-corp/workmux/main/scripts/install.sh | sh
 go install github.com/trivial-corp/workmux/cmd/workmux@latest
 docker run ...                                   # see Docker below
 git clone … && make build                        # from source
 ```
+
+`npx workmux` works because the npm package **contains** the binary — one small
+package per platform, each declaring its own `os`/`cpu`, so npm downloads exactly one
+and skips the rest. No postinstall script, nothing fetched at install time, and no
+second runtime: node's only job is to exec the binary it already has. (An earlier
+attempt shipped a node shim around a *python* server, which needed two runtimes to run
+one file. This is the opposite of that.)
 
 All of them give you the same single static binary. Requires **git**; `docker`
 only if your project has a stack and `gh` only for PR titles — both optional, and
@@ -272,7 +280,7 @@ not cover WebSockets).
 - [x] Actions: new work, start/stop a stack, merge the base in, check a PR out
 - [x] MCP panel: reachability, scope, authenticate
 - [ ] The frontend as a proper TS build, embedded — shared with a mobile app
-- [ ] Release binaries, Homebrew, and an npm package that ships the binary
+- [x] Release binaries, Homebrew, and an npm package that ships the binary
 - [ ] Paired device tokens and TLS, for the remote/mobile case
 
 ## Using it on another project

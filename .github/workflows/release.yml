@@ -28,6 +28,39 @@ jobs:
           # secret the release still publishes; only the brew formula is skipped.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+  npm:
+    # The npm package *contains* the binary — no shim to another runtime, nothing
+    # fetched at install time. Publishing is gated on the secret existing, so a tag
+    # produces the packages either way and only pushes them when you've decided to.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: https://registry.npmjs.org
+      - run: make dist VERSION=${{ github.ref_name }}
+      - run: ./scripts/npm-build.sh ${{ github.ref_name }}
+      - name: Publish
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Platform packages first: the launcher depends on them at an exact version,
+          # so publishing it first would leave `npx workmux` briefly broken.
+          for d in npm/build/workmux-*/; do (cd "$d" && npm publish --access public); done
+          (cd npm/build/workmux && npm publish --access public)
+      - name: Explain the skip
+        if: ${{ secrets.NPM_TOKEN == '' }}
+        run: |
+          echo "NPM_TOKEN is not set, so nothing was published."
+          echo "The packages were built and verified; add the secret to publish on the next tag."
+
   image:
     # deploy/compose.yaml points at ghcr.io/trivial-corp/workmux, so the image has
     # to exist. Same tag as the release, plus latest.

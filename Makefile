@@ -2,7 +2,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test test-race lint run dev watch debug install deploy tidy dist clean
+.PHONY: build test test-race lint run dev watch debug install deploy npm tidy dist clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o workmux ./cmd/workmux
@@ -92,5 +92,10 @@ deploy:
 	ssh $(HOST) "mv $(DEST)/workmux.new $(DEST)/workmux && chmod +x $(DEST)/workmux && $(DEST)/workmux --version"; \
 	echo "  now on the box:  cd /your/repo && workmux init"
 
+# The npm packages that carry the binaries (esbuild's pattern). Build only —
+# publishing is a deliberate, separate step.
+npm: dist
+	./scripts/npm-build.sh $(VERSION)
+
 clean:
-	rm -rf dist workmux
+	rm -rf dist workmux npm/build

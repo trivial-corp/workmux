@@ -1,0 +1,18 @@
+{
+  "name": "workmux",
+  "version": "0.0.0",
+  "description": "Run several coding agents at once, one git worktree each, from a browser. A single static binary — this package just ships it.",
+  "keywords": ["worktree", "git-worktree", "agents", "claude-code", "terminal", "xterm", "dashboard", "docker-compose", "mobile"],
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/trivial-corp/workmux.git" },
+  "homepage": "https://github.com/trivial-corp/workmux",
+  "bin": { "workmux": "cli.js" },
+  "files": ["cli.js", "README.md"],
+  "engines": { "node": ">=18" },
+  "optionalDependencies": {
+    "workmux-darwin-arm64": "0.0.0",
+    "workmux-darwin-amd64": "0.0.0",
+    "workmux-linux-arm64": "0.0.0",
+    "workmux-linux-amd64": "0.0.0"
+  }
+}
