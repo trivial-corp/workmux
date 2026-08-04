@@ -3,6 +3,7 @@ package initcmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,25 @@ import (
 
 	"github.com/trivial-corp/workmux/internal/testrepo"
 )
+
+// agentPresent pins the configured agent as installed for the duration of a test.
+// Without this, whether `claude` happens to be on the machine decides how many
+// questions init asks — and a scripted set of answers then lands on the wrong ones.
+// CI caught exactly that.
+func agentPresent(t *testing.T) {
+	t.Helper()
+	orig := lookPath
+	lookPath = func(string) (string, error) { return "/usr/local/bin/claude", nil }
+	t.Cleanup(func() { lookPath = orig })
+}
+
+// agentMissing is the other half, for the one test that's about that question.
+func agentMissing(t *testing.T) {
+	t.Helper()
+	orig := lookPath
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+	t.Cleanup(func() { lookPath = orig })
+}
 
 // The common case: a repo where every default fits. Init must say so and write
 // nothing — a file full of restated defaults goes stale and hides real decisions.
@@ -174,6 +194,7 @@ func keys(m map[string]any) []string {
 
 // Interactive: the answers decide what gets written, and a "no" writes nothing.
 func TestInteractiveAcceptsEverything(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -209,6 +230,7 @@ func TestInteractiveAcceptsEverything(t *testing.T) {
 }
 
 func TestInteractiveDeclineWritesNothing(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -230,6 +252,7 @@ func TestInteractiveDeclineWritesNothing(t *testing.T) {
 
 // Declining every question means there's nothing to configure, not an empty file.
 func TestInteractiveDeclineEverything(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -250,6 +273,7 @@ func TestInteractiveDeclineEverything(t *testing.T) {
 
 // A bare Enter takes the default: yes to the copy list, skip the url.
 func TestInteractiveDefaults(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -275,6 +299,7 @@ func TestInteractiveDefaults(t *testing.T) {
 
 // A pipe or an agent gets no questions and the same result as before.
 func TestNonInteractiveIsUnchanged(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -295,6 +320,7 @@ func TestNonInteractiveIsUnchanged(t *testing.T) {
 
 // --yes is interactive input's opposite: take defaults, ask nothing.
 func TestYesSkipsPrompts(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write(".gitignore", ".env\n")
 	r.Write(".env", "X=1\n")
@@ -331,6 +357,7 @@ func TestURLPromptRejectsNonsense(t *testing.T) {
 }
 
 func TestInteractiveRetriesABadURL(t *testing.T) {
+	agentPresent(t)
 	r := testrepo.New(t, "app")
 	r.Write("compose.yaml", "services: {}\n")
 	r.Write(".gitignore", ".env\n")
@@ -356,5 +383,45 @@ func TestInteractiveRetriesABadURL(t *testing.T) {
 	}
 	if strings.Contains(string(body), "nope") {
 		t.Errorf("the rejected value was written anyway: %s", body)
+	}
+}
+
+// The agent question only appears when the agent isn't there, and answering yes
+// records that this project has none.
+func TestAgentMissingOffersToRecordIt(t *testing.T) {
+	agentMissing(t)
+	r := testrepo.New(t, "app")
+
+	var out bytes.Buffer
+	// agent missing? yes · write? yes
+	if err := Run(&out, Options{Root: r.Root, In: strings.NewReader("y\ny\n")}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "not on PATH") {
+		t.Errorf("should report the agent is missing:\n%s", out.String())
+	}
+	body, err := os.ReadFile(filepath.Join(r.Root, "workmux.json"))
+	if err != nil {
+		t.Fatalf("nothing written: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := doc["agent"]; !ok || v != nil {
+		t.Errorf(`want "agent": null, got %s`, body)
+	}
+}
+
+// And when it is installed, that question must not be asked at all.
+func TestAgentPresentAsksNothingAboutIt(t *testing.T) {
+	agentPresent(t)
+	r := testrepo.New(t, "app")
+	var out bytes.Buffer
+	if err := Run(&out, Options{Root: r.Root, In: strings.NewReader("")}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "no agent") {
+		t.Errorf("asked about the agent when it's installed:\n%s", out.String())
 	}
 }

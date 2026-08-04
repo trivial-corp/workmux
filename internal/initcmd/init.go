@@ -257,12 +257,17 @@ func wrote(doc map[string]any) []string {
 	return out
 }
 
+// lookPath is a seam. Whether the configured agent is installed changes which
+// questions init asks, so a test that scripts the answers would otherwise pass or
+// fail depending on the machine — which is how CI found this.
+var lookPath = exec.LookPath
+
 func onPath(command string) bool {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return false
 	}
-	_, err := exec.LookPath(fields[0])
+	_, err := lookPath(fields[0])
 	return err == nil
 }
 
@@ -288,7 +293,7 @@ func agentSummary(cfg *config.Config) string {
 		return "none configured"
 	}
 	exe := strings.Fields(cfg.Agent.Command)[0]
-	if _, err := exec.LookPath(exe); err != nil {
+	if _, err := lookPath(exe); err != nil {
 		return fmt.Sprintf("%s \033[33m(not on PATH — install it, or set \"agent\": null)\033[0m", cfg.Agent.Command)
 	}
 	jobs := cfg.JobsDir()
