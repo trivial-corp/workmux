@@ -272,6 +272,46 @@ function connect(id, pane) {
   });
 }
 
+// A terminal can't carry an image, but an agent takes a *path* — so a pasted
+// screenshot is uploaded and its path typed in for you. "Here's what it looks like,
+// fix it" is half of working with an agent, and it was simply impossible before.
+async function pasteImages(items, insert) {
+  const files = [];
+  for (const item of items || []) {
+    if (item.kind === "file" && (item.type || "").startsWith("image/")) {
+      const f = item.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  if (!files.length) return false;
+  for (const f of files) {
+    let r;
+    try {
+      r = await (await fetch("/api/upload", { method: "POST",
+        headers: { "Content-Type": f.type }, body: f })).json();
+    } catch { insert("[upload failed]"); continue; }
+    // A trailing space so a second paste, or typed words after it, don't run into
+    // the path.
+    insert(r.path ? r.path + " " : "[" + (r.error || "upload failed") + "]");
+  }
+  return true;
+}
+
+function sendText(text) {
+  const p = PANES.get(ACTIVE);
+  if (p && p.ws && p.ws.readyState === 1) p.ws.send(new TextEncoder().encode(text));
+}
+
+// The terminal: xterm.js pastes text itself, so only images need handling here.
+$("term").addEventListener("paste", (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  const hasImage = [...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"));
+  if (!hasImage) return;
+  e.preventDefault();
+  pasteImages(items, sendText);
+}, true);
+
 function fitSize() {
   const p = PANES.get(ACTIVE);
   if (p) return { cols: p.term.cols, rows: p.term.rows };

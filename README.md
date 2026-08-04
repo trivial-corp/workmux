@@ -10,7 +10,7 @@ It serves the repo you're standing in at <http://127.0.0.1:4315>. A single stati
 binary, no runtime, no config, and it works from a phone.
 
 > **Status: the Go rewrite is in progress.** The dashboard, the API and the
-> agent↔worktree mapping are here and tested. Terminal sessions, the diff pane and
+> agent↔worktree mapping and terminal sessions are here and tested. The diff pane and
 > the MCP panel are being ported from the original (a ~4,500-line Python
 > implementation that has been in daily use); see [Roadmap](#roadmap). The `main`
 > branch always builds and passes its tests.
@@ -242,13 +242,24 @@ comes from the same JSON:
 | `GET /api/work` | the whole dashboard: worktrees, agents, PRs, stacks, sessions, capabilities |
 | `GET /api/config` | the resolved project shape |
 | `GET /api/health` | liveness, outside the token check so a proxy can probe it |
+| `GET /api/session/list` | live sessions |
+| `POST /api/session/new` | `{kind, cwd, cols, rows}` — shell / agent / attach / logs / git, or `resume` for "this worktree's agent, whatever that is" |
+| `POST /api/session/kill` | `{id}` |
+| `WS /api/session/socket/{id}` | binary frames are raw PTY bytes both ways; text frames are JSON control (`{"t":"size"}`, `{"t":"exit"}`) |
+| `POST /api/upload` | a pasted image; returns the path to type into a session |
+
+Two rules the session API keeps, both server-side, because between them they're the
+difference between a dev tool and a remote shell for anyone who can reach the port:
+a session may only open in one of **this** repository's worktrees, and a WebSocket
+upgrade must come from an origin this instance is actually reachable at (CORS does
+not cover WebSockets).
 
 ## Roadmap
 
 - [x] Config resolution with defaults, optional stack, configurable agent
 - [x] Worktrees, agents, PRs, stacks, ordering — `GET /api/work`
 - [x] Token auth, origin allowlist, embedded UI
-- [ ] Terminal sessions: PTY + WebSocket, replay on reattach, size arbitration
+- [x] Terminal sessions: PTY + WebSocket, replay on reattach, size arbitration
 - [ ] Changes: status, per-file diffs, commits this branch has that its base doesn't
 - [ ] Actions: new work, start/stop a stack, merge the base in, check a PR out
 - [ ] MCP panel: reachability, scope, authenticate
