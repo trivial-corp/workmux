@@ -10,7 +10,7 @@ It serves the repo you're standing in at <http://127.0.0.1:4315>. A single stati
 binary, no runtime, no config, and it works from a phone.
 
 > **Status: the Go rewrite is in progress.** The dashboard, the API and the
-> agent↔worktree mapping and terminal sessions are here and tested. The diff pane and
+> the agent↔worktree mapping, terminal sessions, changes, actions and the MCP panel are
 > the MCP panel are being ported from the original (a ~4,500-line Python
 > implementation that has been in daily use); see [Roadmap](#roadmap). The `main`
 > branch always builds and passes its tests.
@@ -249,6 +249,12 @@ comes from the same JSON:
 | `POST /api/upload` | a pasted image; puts it on the host clipboard and returns the path |
 | `GET /api/changes` | `?path=&base=` — file status with line counts, plus the commits this branch has that its base doesn't |
 | `GET /api/diff` | `?path=&file=` for a file, `?path=&rev=` for a commit |
+| `POST /api/new` | `{prompt, name?, base?}` — a worktree, its files, and an agent on the task |
+| `POST /api/stack` | `{action, slot, path}` — up / restart / stop, through the project's own commands |
+| `POST /api/update` | `{path, base}` — merge the base branch in, aborting on conflict |
+| `POST /api/pr` | `{ref}` — check a PR out into its own worktree |
+| `GET /api/mcp`, `POST /api/mcp/add`, `/api/mcp/remove` | the agent's server registry, with reachability |
+| `GET /api/log` | this process's own log |
 
 Two rules the session API keeps, both server-side, because between them they're the
 difference between a dev tool and a remote shell for anyone who can reach the port:
@@ -263,8 +269,8 @@ not cover WebSockets).
 - [x] Token auth, origin allowlist, embedded UI
 - [x] Terminal sessions: PTY + WebSocket, replay on reattach, size arbitration
 - [x] Changes: status, per-file diffs, commits this branch has that its base doesn't
-- [ ] Actions: new work, start/stop a stack, merge the base in, check a PR out
-- [ ] MCP panel: reachability, scope, authenticate
+- [x] Actions: new work, start/stop a stack, merge the base in, check a PR out
+- [x] MCP panel: reachability, scope, authenticate
 - [ ] The frontend as a proper TS build, embedded — shared with a mobile app
 - [ ] Release binaries, Homebrew, and an npm package that ships the binary
 - [ ] Paired device tokens and TLS, for the remote/mobile case

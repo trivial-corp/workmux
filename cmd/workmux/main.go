@@ -19,11 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/trivial-corp/workmux/internal/actions"
 	"github.com/trivial-corp/workmux/internal/agents"
 	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
 	"github.com/trivial-corp/workmux/internal/initcmd"
+	"github.com/trivial-corp/workmux/internal/mcp"
 	"github.com/trivial-corp/workmux/internal/presets"
+	"github.com/trivial-corp/workmux/internal/prs"
 	"github.com/trivial-corp/workmux/internal/run"
 	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/web"
@@ -169,6 +172,16 @@ func main() {
 		Origins: origins(opts.host, opts.port), DevDir: devDir,
 		Verbose: opts.verbose || opts.devSet}
 
+	// Everything that changes something, and the agent's server registry. Both read
+	// their commands from config, so a project that can't do one of them offers
+	// nothing rather than a button that fails.
+	srv.MCP = &mcp.Reader{Cfg: cfg}
+	runner := &actions.Runner{Cfg: cfg, Invalidate: func() {
+		reader.Invalidate()
+		prs.Invalidate()
+	}}
+	srv.Actions = &web.Actions{Runner: runner}
+
 	// Terminals hand out a shell, so they're wired only when asked for — and then
 	// the routes exist; otherwise they don't, rather than answering "disabled".
 	if !opts.noTerm {
@@ -181,6 +194,23 @@ func main() {
 			KnownDir: builder.IsWorktree,
 		}
 		srv.Agents = builder.AgentFor
+		// New work starts its agent through a session-less spawn, so it survives the
+		// request that asked for it.
+		runner.Spawn = func(cwd, prompt string) (string, error) {
+			cmd := cfg.SpawnCmd(prompt)
+			if cmd == "" {
+				return "", nil
+			}
+			res := run.Env(cwd, append(os.Environ(), "PATH="+mcp.UserPath()),
+				3*time.Minute, os.Getenv("SHELL"), "-lc", cmd)
+			if !res.OK() {
+				web.Journal.Note("agent spawn failed in %s: %s", filepath.Base(cwd),
+					res.LastLine("no output"))
+				return "", fmt.Errorf("%s", res.LastLine("agent spawn failed"))
+			}
+			web.Journal.Note("agent started in %s", filepath.Base(cwd))
+			return res.Out, nil
+		}
 		// The work list shows which sessions belong to which worktree, so it reads
 		// them from the same registry rather than keeping its own idea.
 		builder.Sessions = func() []work.Session {

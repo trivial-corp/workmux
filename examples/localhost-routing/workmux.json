@@ -1,0 +1,13 @@
+{
+  "name": "myapp",
+  "worktrees": {
+    "path": ".claude/worktrees",
+    "copy": [".env"]
+  },
+  "stack": {
+    "compose": "compose.yaml",
+    "slots": "myapp{n}",
+    "url": "http://{slot}.localhost",
+    "profiles": "app"
+  }
+}

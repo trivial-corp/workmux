@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/trivial-corp/workmux/internal/config"
+	"github.com/trivial-corp/workmux/internal/mcp"
 	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/work"
 )
@@ -58,6 +59,10 @@ type Server struct {
 	Sessions *Sessions
 	// Agents answers "which agent lives in this worktree", for resume.
 	Agents func(cwd string) (id string, ok bool)
+	// Actions performs everything that changes something. Nil disables those routes.
+	Actions *Actions
+	// MCP surfaces the agent's server registry.
+	MCP *mcp.Reader
 }
 
 // agentIDRe bounds what can be passed to an attach command.
@@ -94,6 +99,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
 	mux.HandleFunc("/api/changes", s.guard(s.handleChanges))
 	mux.HandleFunc("/api/diff", s.guard(s.handleDiff))
+	mux.HandleFunc("/api/log", s.guard(s.handleLog))
+	if s.Actions != nil {
+		mux.HandleFunc("/api/new", s.guard(s.handleNewWork))
+		mux.HandleFunc("/api/stack", s.guard(s.handleStack))
+		mux.HandleFunc("/api/update", s.guard(s.handleUpdate))
+		mux.HandleFunc("/api/pr", s.guard(s.handlePR))
+	}
+	if s.MCP != nil {
+		mux.HandleFunc("/api/mcp", s.guard(s.handleMCPList))
+		mux.HandleFunc("/api/mcp/add", s.guard(s.handleMCPAdd))
+		mux.HandleFunc("/api/mcp/remove", s.guard(s.handleMCPRemove))
+	}
 	if s.Sessions != nil {
 		mux.HandleFunc("/api/session/list", s.guard(s.handleSessionList))
 		mux.HandleFunc("/api/session/new", s.guard(s.handleSessionNew))

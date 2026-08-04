@@ -1,0 +1,51 @@
+# Your app, one stack per piece of work.
+#
+#   docker compose -p myapp1 up -d     → http://myapp1.localhost
+#   docker compose -p myapp2 up -d     → http://myapp2.localhost
+#
+# The hostnames come from COMPOSE_PROJECT_NAME, which compose sets from -p, so this
+# one file serves every slot with nothing to edit per worktree.
+services:
+  web:
+    image: nginx:alpine
+    labels:
+      - traefik.enable=true
+      # The router name carries the slot as well: two routers with the same name
+      # silently overwrite each other, and whichever stack lost starts 404ing.
+      - traefik.http.routers.web-${COMPOSE_PROJECT_NAME}.rule=Host(`${COMPOSE_PROJECT_NAME}.localhost`)
+      - traefik.http.routers.web-${COMPOSE_PROJECT_NAME}.entryPoints=web
+      - traefik.http.services.web-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=80
+      - traefik.docker.network=edge
+    networks: [edge, internal]
+
+  api:
+    image: kennethreitz/httpbin
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api-${COMPOSE_PROJECT_NAME}.rule=Host(`api.${COMPOSE_PROJECT_NAME}.localhost`)
+      - traefik.http.routers.api-${COMPOSE_PROJECT_NAME}.entryPoints=web
+      - traefik.http.services.api-${COMPOSE_PROJECT_NAME}.loadbalancer.server.port=80
+      - traefik.docker.network=edge
+    networks: [edge, internal]
+
+  # Not exposed: reachable by the app as "db" on the internal network and by nothing
+  # else. Each slot gets its own, so two worktrees can't corrupt each other's data.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: app
+    volumes:
+      # No slot in the name: compose already prefixes volumes with the project, so
+      # -p myapp1 and -p myapp2 get separate databases for free. (And a volume *key*
+      # can't be interpolated, so spelling it out here wouldn't even load.)
+      - db:/var/lib/postgresql/data
+    networks: [internal]
+
+volumes:
+  db:
+
+networks:
+  edge:
+    external: true    # created by compose.proxy.yaml
+  internal:

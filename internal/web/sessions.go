@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,7 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
+	Journal.Note("session %s (%s) started in %s", sess.ID, sess.Kind, filepath.Base(sess.CWD))
 	writeJSON(w, http.StatusOK, sess.Info())
 }
 
@@ -113,6 +115,7 @@ func (s *Server) handleSessionKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.Kill()
+	Journal.Note("session %s killed", req.ID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -132,6 +135,7 @@ func (s *Server) handleSessionSocket(w http.ResponseWriter, r *http.Request) {
 	// CORS does not cover WebSockets: without this check any page you had open
 	// could connect to localhost and get a shell.
 	if !s.OriginOK(r.Header.Get("Origin")) {
+		Journal.Note("refused a websocket from origin %q", r.Header.Get("Origin"))
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}

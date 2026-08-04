@@ -130,7 +130,7 @@ func Load(root string) (*Config, error) {
 
 	c.Agent = resolveAgent(r.Agent)
 	c.Stack = resolveStack(r.Stack, root, c.Name)
-	pat := c.Name + "{n}"
+	pat := slotStem(c.Name) + "{n}"
 	if c.Stack != nil {
 		pat = c.Stack.Slots
 	}
@@ -208,7 +208,9 @@ func resolveStack(rm json.RawMessage, root, name string) *Stack {
 		return nil // nothing to run → no stack, and so no stack buttons
 	}
 	if s.Slots == "" {
-		s.Slots = name + "{n}"
+		// A trailing number in the project name is already a slot number: a repo
+		// called trip1 wants trip1, trip2 — not trip11, trip12.
+		s.Slots = slotStem(name) + "{n}"
 	}
 	if s.Profiles == "" {
 		s.Profiles = os.Getenv("COMPOSE_PROFILES")
@@ -231,12 +233,22 @@ func isNull(rm json.RawMessage) bool {
 	return len(rm) > 0 && string(rm) == "null"
 }
 
+// slotStem drops a trailing number from a name, so trip1 yields trip1 and trip2
+// rather than trip11 and trip12. A name that is nothing but digits keeps itself.
+func slotStem(name string) string {
+	stem := strings.TrimRight(name, "0123456789")
+	if stem == "" {
+		return name
+	}
+	return stem
+}
+
 // HasStack reports whether this project has containers at all.
 func (c *Config) HasStack() bool { return c.Stack != nil }
 
 // SlotName is the nth stack slot — trip1, trip2, …
 func (c *Config) SlotName(n int) string {
-	pat := c.Name + "{n}"
+	pat := slotStem(c.Name) + "{n}"
 	if c.Stack != nil {
 		pat = c.Stack.Slots
 	}

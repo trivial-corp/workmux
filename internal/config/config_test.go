@@ -276,3 +276,31 @@ func TestConfiguredPatternStillBounded(t *testing.T) {
 		}
 	}
 }
+
+// A project called trip1 wants slots trip1, trip2 — not trip11. The trailing number
+// in the name *is* a slot number, and defaulting to "{name}{n}" read as a bug.
+func TestSlotsDropATrailingNumberFromTheName(t *testing.T) {
+	c := load(t, write(t, "trip1", map[string]string{"compose.yaml": "services: {}\n"}))
+	if got := c.Stack.Slots; got != "trip{n}" {
+		t.Errorf("slots = %q, want trip{n}", got)
+	}
+	if got := c.SlotName(1); got != "trip1" {
+		t.Errorf("slot 1 = %q, want trip1", got)
+	}
+	if got := c.SlotName(2); got != "trip2" {
+		t.Errorf("slot 2 = %q, want trip2", got)
+	}
+	if !c.IsSlot("trip1") || !c.IsSlot("trip7") {
+		t.Error("numbered slots must match")
+	}
+	// A name with no trailing digits is untouched.
+	c = load(t, write(t, "shop", map[string]string{"compose.yaml": "services: {}\n"}))
+	if got := c.SlotName(2); got != "shop2" {
+		t.Errorf("slot = %q, want shop2", got)
+	}
+	// And a name that is only digits keeps itself, rather than becoming "{n}".
+	c = load(t, write(t, "2024", map[string]string{"compose.yaml": "services: {}\n"}))
+	if got := c.SlotName(1); got != "20241" {
+		t.Errorf("slot = %q", got)
+	}
+}
