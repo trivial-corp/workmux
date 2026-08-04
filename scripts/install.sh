@@ -23,9 +23,20 @@ case "$os" in
   *) echo "workmux: no build for $os" >&2; exit 1 ;;
 esac
 
+# A private repository's assets aren't readable anonymously, so a token switches this
+# to the API, where an asset is fetched by id. Same script either way.
+TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+api() {
+  if [ -n "$TOKEN" ]; then
+    curl -fsSL -H "Authorization: Bearer $TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" "$@"
+  else
+    curl -fsSL "$@"
+  fi
+}
+
 version="${WORKMUX_VERSION:-}"
 if [ -z "$version" ]; then
-  version=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
+  version=$(api "https://api.github.com/repos/$REPO/releases/latest" |
             sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 fi
 [ -n "$version" ] || { echo "workmux: could not find the latest release" >&2; exit 1; }
@@ -37,10 +48,30 @@ base="https://github.com/$REPO/releases/download/$version"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 echo "workmux $version ($os/$arch)"
-curl -fsSL "$base/$archive" -o "$tmp/$archive"
+
+# fetch NAME DEST — by URL when public, by asset id when authenticated.
+release_json=""
+fetch() {
+  if [ -z "$TOKEN" ]; then
+    curl -fsSL "$base/$1" -o "$2"
+    return
+  fi
+  [ -n "$release_json" ] || release_json=$(api "https://api.github.com/repos/$REPO/releases/tags/$version")
+  # The API pretty-prints, so an asset's id and its name are on different lines. Keep
+  # the last id seen and print it when the name matches — no jq, which a fresh box
+  # won't have.
+  id=$(printf '%s\n' "$release_json" | awk -v want="$1" '
+    /"id":[[:space:]]*[0-9]+/ { n=$0; gsub(/[^0-9]/, "", n); last=n }
+    index($0, "\"name\": \"" want "\"") { print last; exit }')
+  [ -n "$id" ] || { echo "workmux: $1 is not in release $version" >&2; return 1; }
+  curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" \
+       "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$2"
+}
+
+fetch "$archive" "$tmp/$archive"
 
 # Verify before running anything from it.
-if curl -fsSL "$base/checksums.txt" -o "$tmp/checksums.txt" 2>/dev/null; then
+if fetch checksums.txt "$tmp/checksums.txt" 2>/dev/null; then
   want=$(grep " $archive\$" "$tmp/checksums.txt" | awk '{print $1}')
   if [ -n "$want" ]; then
     if command -v shasum >/dev/null; then got=$(shasum -a 256 "$tmp/$archive" | awk '{print $1}')

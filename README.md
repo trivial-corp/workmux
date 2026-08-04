@@ -63,9 +63,10 @@ Homebrew gets a **cask** rather than a formula, because what ships is a pre-buil
 binary — which makes it macOS-only; on Linux use the install script, the container
 image, or `go install`.
 
-> While this repo is private, `brew` and the install script can't reach the release
-> assets. `go install` works with repo access (`GOPRIVATE=github.com/trivial-corp`),
-> and building from source always works.
+> **While this repo is private**, anonymous downloads of release assets 404 — so the
+> install script needs a token (`GITHUB_TOKEN=$(gh auth token)`), `go install` needs
+> `GOPRIVATE=github.com/trivial-corp`, and `npx`/`brew` don't work at all until either
+> the packages are published or the repo is public. Building from source always works.
 
 ### Docker
 
