@@ -1,0 +1,31 @@
+# workmux in a container. Copy this next to your project and adjust the paths.
+#
+#   REPO=/srv/myapp HOME_DIR=/root docker compose up -d
+#
+# The mounts look redundant but aren't: every path inside the container has to
+# equal its path on the host. Agent state records absolute directories, and a
+# stack started through the mounted socket runs on the *host* daemon — so a repo
+# mounted at /repo would produce a dashboard that agrees with nothing.
+services:
+  workmux:
+    image: ghcr.io/trivial-corp/workmux:latest
+    # or: build: https://github.com/trivial-corp/workmux.git
+    working_dir: ${REPO:?set REPO to your repository path}
+    command: ["--root", "${REPO}"]
+    environment:
+      # Same HOME as on the host, so the agent's state directory resolves.
+      HOME: ${HOME_DIR:-/root}
+      # Off loopback, so a token is required. Pin it rather than reading it out of
+      # the logs every restart.
+      WORKMUX_TOKEN: ${WORKMUX_TOKEN:?set a token}
+    ports:
+      - "4315:4315"
+    volumes:
+      # The repository, at its own path.
+      - ${REPO}:${REPO}
+      # The agent's state, at its own path — this is what maps agents to worktrees.
+      - ${HOME_DIR:-/root}/.claude:${HOME_DIR:-/root}/.claude
+      # The host docker daemon, for projects that have a stack. This is root-equivalent
+      # access to the host: only do it on a machine you'd already trust the tool on.
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

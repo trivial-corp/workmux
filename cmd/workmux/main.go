@@ -20,6 +20,7 @@ import (
 	"github.com/trivial-corp/workmux/internal/agents"
 	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
+	"github.com/trivial-corp/workmux/internal/initcmd"
 	"github.com/trivial-corp/workmux/internal/run"
 	"github.com/trivial-corp/workmux/internal/web"
 	"github.com/trivial-corp/workmux/internal/work"
@@ -31,6 +32,7 @@ var version = "dev"
 const usage = `workmux — run several coding agents at once, one git worktree each, from a browser.
 
 usage: workmux [options]
+       workmux init [--dry-run] [--force]    look at this repo and set it up
 
   -p, --port N       port to listen on (default 4315)
       --host ADDR    interface to bind (default 127.0.0.1). 0.0.0.0 reaches it
@@ -65,6 +67,13 @@ type options struct {
 }
 
 func main() {
+	// One subcommand, and it's the bootstrap: `workmux init` reports what this
+	// repo looks like and writes config only for what can't be inferred.
+	if len(os.Args) > 1 && os.Args[1] == "init" {
+		runInit(os.Args[2:])
+		return
+	}
+
 	opts, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "workmux: %v (try --help)\n", err)
@@ -190,6 +199,35 @@ func main() {
 	}
 	if err := srv.Listen(addr); err != nil {
 		fmt.Fprintf(os.Stderr, "workmux: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runInit(argv []string) {
+	o := initcmd.Options{Root: "."}
+	for _, a := range argv {
+		switch a {
+		case "--dry-run", "-n":
+			o.DryRun = true
+		case "--force", "-f":
+			o.Force = true
+		case "-h", "--help":
+			fmt.Print(usage)
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "workmux init: unknown option %s\n", a)
+			os.Exit(2)
+		}
+	}
+	root, err := filepath.Abs(o.Root)
+	if err == nil {
+		if resolved, e := filepath.EvalSymlinks(root); e == nil {
+			root = resolved
+		}
+		o.Root = root
+	}
+	if err := initcmd.Run(os.Stdout, o); err != nil {
+		fmt.Fprintf(os.Stderr, "workmux init: %v\n", err)
 		os.Exit(1)
 	}
 }

@@ -39,21 +39,63 @@ Two details it gets right, because both were bugs first:
 
 ## Install
 
-```
+```sh
+brew install trivial-corp/tap/workmux            # macOS / Linuxbrew
+curl -fsSL https://raw.githubusercontent.com/trivial-corp/workmux/main/scripts/install.sh | sh
 go install github.com/trivial-corp/workmux/cmd/workmux@latest
+docker run ...                                   # see Docker below
+git clone … && make build                        # from source
 ```
 
-Or build it:
+All of them give you the same single static binary. Requires **git**; `docker`
+only if your project has a stack and `gh` only for PR titles — both optional, and
+their absence costs you that column and nothing else. macOS and Linux.
+
+> While this repo is private, `brew` and the install script can't reach the
+> release assets. `go install` works with repo access (`GOPRIVATE=github.com/trivial-corp`),
+> and building from source always works.
+
+### Docker
+
+For a box without a Go toolchain — a homelab server, or managed alongside other
+services. See [`deploy/compose.yaml`](deploy/compose.yaml); the short version:
+
+```sh
+docker run -d -p 4315:4315 \
+  -v /srv/myapp:/srv/myapp -w /srv/myapp \
+  -v "$HOME/.claude:$HOME/.claude" -e HOME="$HOME" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e WORKMUX_TOKEN=pick-something \
+  ghcr.io/trivial-corp/workmux --root /srv/myapp
+```
+
+**The repeated paths are the point, not boilerplate.** Agent state records
+absolute directories and a stack started through the mounted socket runs on the
+*host* daemon, so everything must sit at the same path inside the container as
+outside. A repo mounted at `/repo` produces a dashboard that agrees with nothing.
+
+Two things to know: mounting the docker socket is root-equivalent access to the
+host, so only do it on a machine you'd already trust this tool on; and the image
+ships **no coding agent** — bake yours in (`RUN npm i -g @anthropic-ai/claude-code`)
+or run with `"agent": null`.
+
+## Setting it up
 
 ```
-git clone https://github.com/trivial-corp/workmux && cd workmux && make build
+workmux init
 ```
 
-Requires git. `docker` matters only if your project has a stack, `gh` only for PR
-titles and authors — both optional, and their absence costs you that column and
-nothing else.
+It reports what it found — name, base branch, worktree location, stack, agent, and
+the gitignored files a new worktree would be missing — and writes config **only**
+for that last item, because it's the one thing no amount of runtime detection can
+work out. Everything else is derived from the repo, so most projects get:
 
-macOS and Linux.
+```
+  Nothing to configure. Every default fits this repo — just run workmux.
+```
+
+`--dry-run` prints instead of writing; `--force` replaces an existing file. Agents
+have their own instructions for this in [AGENTS.md](AGENTS.md).
 
 ## Configuration
 
@@ -184,8 +226,26 @@ per-worktree stacks:
 **Run it from source, against any project. No build, no install, no CI:**
 
 ```
-make dev ROOT=~/code/my-drupal-site          # or PORT=4321 to sit beside another
+make dev ROOT=~/code/some-project            # add PORT=4321 to sit beside another instance
 ```
+
+Against a monorepo with a stack and 40-odd worktrees, that looks like:
+
+```
+$ make dev ROOT=~/Projects/trivial-corp/trip1 PORT=4321
+  workmux dev — trip1
+  http://127.0.0.1:4321
+  dev: frontend from …/internal/web/dist — edit and refresh
+  root: /Users/tomas/Projects/trivial-corp/trip1
+
+16:32:19  2.506s gh pr list --state all --limit 400 --json number,headRefName,…
+16:32:19    79ms docker compose ls --all --format json
+16:32:19    87ms docker compose -p trip1 -f …/compose.yaml ps --all --format json
+16:32:19    16ms pgrep -f claude
+```
+
+— which tells you immediately that `gh pr list` is 2.5s of the first poll (cached
+for 20s after), rather than leaving you to guess.
 
 That's `go run`, so a code change is a Ctrl-C and a re-run — about a second. Two
 things make it a debug loop rather than a guessing game:

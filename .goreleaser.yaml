@@ -1,0 +1,51 @@
+# Release with: git tag v0.2.0 && git push --tags
+# The tag triggers .github/workflows/release.yml, which runs this.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - make lint
+    - make test
+
+builds:
+  - id: workmux
+    main: ./cmd/workmux
+    binary: workmux
+    # No cgo, so every binary is static and runs on anything with the right
+    # kernel and architecture — including a distro older than the build box.
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files: [README.md, LICENSE]
+
+checksums:
+  name_template: checksums.txt
+
+# `brew install trivial-corp/tap/workmux`. Needs a homebrew-tap repo in the org,
+# and both it and this repo public — Homebrew can't fetch from a private release.
+brews:
+  - name: workmux
+    repository:
+      owner: trivial-corp
+      name: homebrew-tap
+    homepage: https://github.com/trivial-corp/workmux
+    description: Run several coding agents at once, one git worktree each, from a browser
+    license: MIT
+    dependencies:
+      - name: git
+    test: |
+      assert_match "workmux", shell_output("#{bin}/workmux --version")
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:']
