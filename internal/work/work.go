@@ -13,6 +13,7 @@ package work
 
 import (
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/trivial-corp/workmux/internal/agents"
@@ -129,16 +130,28 @@ func (b *Builder) Build() View {
 		known[p.Number] = true
 	}
 
+	// Reading a stack is a docker round trip each; with several up they have no
+	// reason to wait for one another.
 	running := stack.Running(cfg)
 	stackByPath := map[string]*StackRef{}
-	for _, p := range running {
-		st := stack.Read(p, cfg)
-		ref := &StackRef{
-			Slot: p.Slot, Dir: baseName(p.Dir), Path: p.Dir,
-			URL: cfg.StackURL(p.Slot), Profiles: splitProfiles(cfg.Profiles()),
-			State: st,
+	if len(running) > 0 {
+		refs := make([]*StackRef, len(running))
+		var wg sync.WaitGroup
+		for i, p := range running {
+			wg.Add(1)
+			go func(i int, p stack.Project) {
+				defer wg.Done()
+				refs[i] = &StackRef{
+					Slot: p.Slot, Dir: baseName(p.Dir), Path: p.Dir,
+					URL: cfg.StackURL(p.Slot), Profiles: splitProfiles(cfg.Profiles()),
+					State: stack.Read(p, cfg),
+				}
+			}(i, p)
 		}
-		stackByPath[p.Dir] = ref
+		wg.Wait()
+		for i, ref := range refs {
+			stackByPath[running[i].Dir] = ref
+		}
 	}
 
 	all := b.Agents.Snapshot(paths)
@@ -152,6 +165,12 @@ func (b *Builder) Build() View {
 	if b.Sessions != nil {
 		sessions = b.Sessions()
 	}
+
+	// Each worktree's behind/ahead is a `git rev-list` — 43 of them here, and
+	// sequentially that *is* the response time. They're independent reads, so run
+	// them at once, bounded so a repo with a hundred worktrees doesn't fork a
+	// hundred gits.
+	drift := driftAll(trees, byBranch, base)
 
 	items := make([]Item, 0, len(trees))
 	for _, w := range trees {
@@ -191,7 +210,7 @@ func (b *Builder) Build() View {
 		if pr != nil && pr.Base != "" {
 			itemBase = pr.Base
 		}
-		behind, ahead := gitx.BehindAhead(w.Path, itemBase)
+		behind, ahead := drift[w.Path].behind, drift[w.Path].ahead
 
 		st := stackByPath[w.Path]
 		if st != nil {
@@ -249,6 +268,35 @@ func (b *Builder) Build() View {
 			Attach: a.Attach != "", Jobs: cfg.JobsDir() != "", MCP: a.MCP != "",
 		},
 	}
+}
+
+type drift struct{ behind, ahead int }
+
+// driftAll counts behind/ahead for every worktree concurrently, each against its
+// own base — a PR's baseRefName when it has one, not an assumption about main.
+func driftAll(trees []gitx.Worktree, byBranch map[string]prs.PR, base string) map[string]drift {
+	out := make(map[string]drift, len(trees))
+	var mu sync.Mutex
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for _, w := range trees {
+		itemBase := base
+		if p, ok := byBranch[w.Branch]; ok && p.Base != "" {
+			itemBase = p.Base
+		}
+		wg.Add(1)
+		go func(path, b string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			behind, ahead := gitx.BehindAhead(path, b)
+			mu.Lock()
+			out[path] = drift{behind, ahead}
+			mu.Unlock()
+		}(w.Path, itemBase)
+	}
+	wg.Wait()
+	return out
 }
 
 // rank is the ordering the whole dashboard leans on.
