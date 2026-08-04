@@ -421,7 +421,10 @@ func TestAgentPresentAsksNothingAboutIt(t *testing.T) {
 	if err := Run(&out, Options{Root: r.Root, In: strings.NewReader("")}); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "no agent") {
+	// Match the question, not a substring of the report: with no agent state on
+	// disk the summary line reads "claude (no agents yet)", which contains "no
+	// agent" and made this fail on a runner while passing on my laptop.
+	if strings.Contains(out.String(), "isn't installed") {
 		t.Errorf("asked about the agent when it's installed:\n%s", out.String())
 	}
 }
