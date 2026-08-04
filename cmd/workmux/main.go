@@ -12,16 +12,20 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/trivial-corp/workmux/internal/agents"
 	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
 	"github.com/trivial-corp/workmux/internal/initcmd"
+	"github.com/trivial-corp/workmux/internal/presets"
 	"github.com/trivial-corp/workmux/internal/run"
+	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/web"
 	"github.com/trivial-corp/workmux/internal/work"
 )
@@ -164,6 +168,40 @@ func main() {
 	srv := &web.Server{Cfg: cfg, Builder: builder, Token: token,
 		Origins: origins(opts.host, opts.port), DevDir: devDir,
 		Verbose: opts.verbose || opts.devSet}
+
+	// Terminals hand out a shell, so they're wired only when asked for — and then
+	// the routes exist; otherwise they don't, rather than answering "disabled".
+	if !opts.noTerm {
+		reg := term.NewRegistry()
+		defer reg.Shutdown()
+		p := presets.Deps{Cfg: cfg, SlotFor: builder.SlotFor}
+		srv.Sessions = &web.Sessions{
+			Reg:      reg,
+			Presets:  p.Spec,
+			KnownDir: builder.IsWorktree,
+		}
+		srv.Agents = builder.AgentFor
+		// The work list shows which sessions belong to which worktree, so it reads
+		// them from the same registry rather than keeping its own idea.
+		builder.Sessions = func() []work.Session {
+			var out []work.Session
+			for _, i := range reg.List() {
+				out = append(out, work.Session{ID: i.ID, Kind: string(i.Kind), Title: i.Title,
+					CWD: i.CWD, Agent: i.Agent, Alive: i.Alive})
+			}
+			return out
+		}
+		// Ctrl-C should take the sessions with it: a PTY whose server has gone is a
+		// process nobody can reach.
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-stop
+			fmt.Fprint(os.Stderr, "\n  stopping sessions…\n")
+			reg.Shutdown()
+			os.Exit(0)
+		}()
+	}
 
 	addr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
 	shown := opts.host

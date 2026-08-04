@@ -388,3 +388,45 @@ func baseName(p string) string {
 	}
 	return p
 }
+
+// IsWorktree reports whether a path is one of this repository's worktrees.
+//
+// This is the boundary that keeps a session from being a shell anywhere on the
+// machine: the caller decides where one may be opened, never the request.
+func (b *Builder) IsWorktree(path string) bool {
+	if path == "" {
+		return false
+	}
+	for _, w := range gitx.Worktrees(b.Cfg.Root) {
+		if w.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// SlotFor names the stack running in a worktree, "" when none is — which is what
+// decides whether a logs session is offered.
+func (b *Builder) SlotFor(cwd string) string {
+	for _, p := range stack.Running(b.Cfg) {
+		if p.Dir == cwd {
+			return p.Slot
+		}
+	}
+	return ""
+}
+
+// AgentFor is this worktree's agent, for resume: the one that most wants
+// attention, which is the same order the list uses.
+func (b *Builder) AgentFor(cwd string) (string, bool) {
+	var paths []string
+	for _, w := range gitx.Worktrees(b.Cfg.Root) {
+		paths = append(paths, w.Path)
+	}
+	for _, a := range b.Agents.Snapshot(paths) {
+		if a.Home == cwd {
+			return a.ID, true
+		}
+	}
+	return "", false
+}

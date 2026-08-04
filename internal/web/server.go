@@ -17,10 +17,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/trivial-corp/workmux/internal/config"
+	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/work"
 )
 
@@ -51,6 +53,25 @@ type Server struct {
 	// Verbose logs each request. Paired with run.Trace it explains a wrong
 	// dashboard: you see the request, then every subprocess it caused.
 	Verbose bool
+	// Sessions serves terminals. Nil means --no-terminal, and then those routes
+	// don't exist at all rather than answering "disabled".
+	Sessions *Sessions
+	// Agents answers "which agent lives in this worktree", for resume.
+	Agents func(cwd string) (id string, ok bool)
+}
+
+// agentIDRe bounds what can be passed to an attach command.
+var agentIDRe = regexp.MustCompile(`^[0-9a-fA-F-]{6,64}$`)
+
+// resolveResume answers "give me this worktree's agent": attach to the one that's
+// there, or start a fresh session rather than making the button a dead end.
+func (s *Server) resolveResume(cwd string) (term.Kind, string) {
+	if s.Agents != nil {
+		if id, ok := s.Agents(cwd); ok && agentIDRe.MatchString(id) {
+			return term.KindAttach, id
+		}
+	}
+	return term.KindAgent, ""
 }
 
 // assets is where the frontend is read from: disk in dev, the binary otherwise.
@@ -70,6 +91,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/work", s.guard(s.handleWork))
 	mux.HandleFunc("/api/config", s.guard(s.handleConfig))
 	mux.HandleFunc("/api/health", s.handleHealth) // unguarded: for a proxy probe
+	if s.Sessions != nil {
+		mux.HandleFunc("/api/session/list", s.guard(s.handleSessionList))
+		mux.HandleFunc("/api/session/new", s.guard(s.handleSessionNew))
+		mux.HandleFunc("/api/session/kill", s.guard(s.handleSessionKill))
+		mux.HandleFunc("/api/session/socket/", s.guard(s.handleSessionSocket))
+	}
 	mux.HandleFunc("/", s.guard(s.handleUI))
 	return mux
 }
