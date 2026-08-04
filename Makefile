@@ -2,7 +2,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test test-race lint run dev watch debug install tidy dist clean
+.PHONY: build test test-race lint run dev watch debug install deploy tidy dist clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o workmux ./cmd/workmux
@@ -65,6 +65,32 @@ dist: clean
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags '$(LDFLAGS)' \
 			-o dist/workmux-$$os-$$arch ./cmd/workmux || exit 1; \
 	done
+
+# Cross-compile for a remote box and install it there, without a Go toolchain or a
+# git checkout on the far side:
+#
+#   make deploy HOST=homelab                    # ~/.local/bin/workmux
+#   make deploy HOST=root@nas DEST=/usr/local/bin
+#
+# The architecture comes from the box itself — guessing it is the one thing that
+# silently produces a binary that won't run.
+DEST ?= ~/.local/bin
+deploy:
+	@[ -n "$(HOST)" ] || { echo "usage: make deploy HOST=[user@]host [DEST=~/.local/bin]"; exit 1; }
+	@set -e; \
+	os=$$(ssh $(HOST) uname -s | tr '[:upper:]' '[:lower:]'); \
+	arch=$$(ssh $(HOST) uname -m); \
+	case "$$arch" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; \
+	  *) echo "no build for $$arch"; exit 1 ;; esac; \
+	echo "  building for $$os/$$arch"; \
+	mkdir -p dist; \
+	CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags '$(LDFLAGS)' \
+	  -o dist/workmux-$$os-$$arch ./cmd/workmux; \
+	echo "  installing to $(HOST):$(DEST)/workmux"; \
+	ssh $(HOST) "mkdir -p $(DEST)"; \
+	scp -q dist/workmux-$$os-$$arch $(HOST):$(DEST)/workmux.new; \
+	ssh $(HOST) "mv $(DEST)/workmux.new $(DEST)/workmux && chmod +x $(DEST)/workmux && $(DEST)/workmux --version"; \
+	echo "  now on the box:  cd /your/repo && workmux init"
 
 clean:
 	rm -rf dist workmux

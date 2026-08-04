@@ -83,6 +83,48 @@ host, so only do it on a machine you'd already trust this tool on; and the image
 ships **no coding agent** — bake yours in (`RUN npm i -g @anthropic-ai/claude-code`)
 or run with `"agent": null`.
 
+## On a homelab box, from your laptop
+
+Cross-compile here, install there. No Go toolchain, no checkout, no CI on the far
+side — and the architecture comes from the box itself, because guessing it is the
+one mistake that quietly produces a binary that won't run:
+
+```
+make deploy HOST=homelab                        # → ~/.local/bin/workmux
+make deploy HOST=root@nas DEST=/usr/local/bin
+```
+
+Then on the box:
+
+```
+cd /srv/myrepo && workmux init && workmux --host 0.0.0.0
+```
+
+To keep it running, [`deploy/workmux.service`](deploy/workmux.service) is a
+**user** service — workmux runs your worktrees, your agent and your docker, so it
+should be you; as root it would hand a shell to anyone who reaches the port.
+
+```
+cp deploy/workmux.service ~/.config/systemd/user/     # then edit the path + token
+systemctl --user enable --now workmux
+loginctl enable-linger $USER                          # survive logout
+```
+
+Off loopback a token is required. It still speaks plain HTTP, so put Tailscale, a
+reverse proxy with TLS, or an SSH tunnel in front — `ssh -L 4315:127.0.0.1:4315
+homelab` needs no token at all and is the safest way in.
+
+## Several at once
+
+Running one per project is the normal case, so the browser tab and the header both
+lead with the project: **`trip1 · workmux`**, **`nas · workmux`**. Give each one its
+own port:
+
+```
+workmux --root ~/code/trip1                 # 4315
+workmux --root ~/code/other --port 4316
+```
+
 ## Setting it up
 
 ```

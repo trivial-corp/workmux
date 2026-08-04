@@ -1,0 +1,31 @@
+# workmux as a user service, for a box you leave running.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp workmux.service ~/.config/systemd/user/
+#   $EDITOR ~/.config/systemd/user/workmux.service      # set WorkingDirectory + the token
+#   systemctl --user daemon-reload && systemctl --user enable --now workmux
+#   loginctl enable-linger $USER                        # survive logout
+#
+# A *user* service on purpose: workmux runs your git worktrees, your agent and your
+# docker, so it should be you. Running it as root would hand a shell to anyone who
+# reaches the port.
+[Unit]
+Description=workmux — parallel agent work, from a browser
+Documentation=https://github.com/trivial-corp/workmux
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/srv/myrepo
+# 0.0.0.0 means off-box requests need the token. Set one here rather than reading a
+# fresh one out of the logs on every restart.
+Environment=WORKMUX_TOKEN=change-me
+ExecStart=%h/.local/bin/workmux --host 0.0.0.0 --root %h/srv/myrepo
+Restart=on-failure
+RestartSec=5
+# It spawns shells and agents that outlive a single request; kill the whole group
+# on stop so nothing is left holding a PTY.
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
