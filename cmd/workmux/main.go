@@ -8,16 +8,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/trivial-corp/workmux/internal/agents"
 	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
+	"github.com/trivial-corp/workmux/internal/run"
 	"github.com/trivial-corp/workmux/internal/web"
 	"github.com/trivial-corp/workmux/internal/work"
 )
@@ -37,6 +40,10 @@ usage: workmux [options]
       --root DIR     repository to serve (default: the current directory)
       --no-terminal  dashboard only — don't serve shells
       --open         open a browser once it's listening
+      --dev [DIR]    serve the frontend from disk (default internal/web/dist)
+                     instead of the copy baked into the binary, and log as if
+                     --verbose. Editing the UI becomes a refresh.
+      --verbose      log every request, every subprocess and what it returned
   -h, --help         this
   -V, --version      print the version
 
@@ -52,6 +59,9 @@ type options struct {
 	root     string
 	noTerm   bool
 	open     bool
+	dev      string
+	devSet   bool
+	verbose  bool
 }
 
 func main() {
@@ -115,9 +125,36 @@ func main() {
 		}
 	}
 
+	// Every fact workmux reports comes from a subprocess, so a wrong dashboard is
+	// nearly always a surprising command result — print them.
+	if opts.verbose || opts.devSet {
+		log.SetFlags(log.Ltime)
+		run.Trace = func(argv []string, dur time.Duration, code int, out string) {
+			status := ""
+			if code != 0 {
+				status = fmt.Sprintf("  \033[31mexit %d\033[0m: %s", code, firstLine(out))
+			}
+			log.Printf("\033[2m%6s\033[0m %s%s", dur.Round(time.Millisecond), strings.Join(argv, " "), status)
+		}
+	}
+
+	devDir := ""
+	if opts.devSet {
+		if abs, err := filepath.Abs(opts.dev); err == nil {
+			devDir = abs
+		}
+		if _, err := os.Stat(filepath.Join(devDir, "index.html")); err != nil {
+			fmt.Fprintf(os.Stderr, "workmux: --dev wants a directory with index.html in it; %s has none.\n"+
+				"Run it from the workmux checkout, or pass --dev=path/to/frontend.\n", devDir)
+			os.Exit(1)
+		}
+	}
+
 	reader := &agents.Reader{JobsDir: cfg.JobsDir(), Process: cfg.Agent.Process}
 	builder := &work.Builder{Cfg: cfg, Agents: reader, Terminal: !opts.noTerm}
-	srv := &web.Server{Cfg: cfg, Builder: builder, Token: token, Origins: origins(opts.host, opts.port)}
+	srv := &web.Server{Cfg: cfg, Builder: builder, Token: token,
+		Origins: origins(opts.host, opts.port), DevDir: devDir,
+		Verbose: opts.verbose || opts.devSet}
 
 	addr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
 	shown := opts.host
@@ -142,6 +179,9 @@ func main() {
 	}
 	if !cfg.HasStack() {
 		fmt.Fprint(os.Stderr, "  \033[2mno stack configured — worktrees, agents and sessions only\033[0m\n")
+	}
+	if devDir != "" {
+		fmt.Fprintf(os.Stderr, "  \033[33mdev\033[0m: frontend from %s — edit and refresh\n", devDir)
 	}
 	fmt.Fprintf(os.Stderr, "  root: %s\n  Ctrl-C to stop.\n\n", root)
 
@@ -203,6 +243,16 @@ func parseArgs(argv []string) (options, error) {
 			o.noTerm = true
 		case "--open":
 			o.open = true
+		case "--verbose":
+			o.verbose = true
+		case "--dev":
+			// A bare --dev means "the frontend in this checkout"; --dev=DIR points
+			// somewhere else (a built frontend, another branch, a scratch copy).
+			o.devSet = true
+			o.dev = defaultDevDir
+			if hasInline {
+				o.dev = inline
+			}
 		case "-p", "--port":
 			v, err := value()
 			if err != nil {
@@ -237,6 +287,10 @@ func parseArgs(argv []string) (options, error) {
 	}
 	return o, nil
 }
+
+// defaultDevDir is where the frontend lives in the source tree, relative to the
+// repo root — which is where `go run ./cmd/workmux` puts you.
+const defaultDevDir = "internal/web/dist"
 
 func isLoopback(host string) bool {
 	switch host {
@@ -294,6 +348,18 @@ func lanAddress() string {
 		}
 	}
 	return ""
+}
+
+// firstLine keeps a failure to one line in the trace; the full output is still
+// what the caller sees.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }
 
 func openBrowser(url string) {

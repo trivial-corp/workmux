@@ -233,3 +233,46 @@ func TestDotfileNameAlsoWorks(t *testing.T) {
 		t.Errorf("name = %q, want renamed", c.Name)
 	}
 }
+
+// `docker compose up` names the project after the directory, so the bare name has
+// to count as a slot — otherwise the one stack an existing project already has
+// running matches nothing and the dashboard says no app is up.
+func TestBareProjectNameIsASlot(t *testing.T) {
+	c := load(t, write(t, "my-drupal-site", map[string]string{"docker-compose.yml": "services: {}\n"}))
+	if !c.IsSlot("my-drupal-site") {
+		t.Error("the bare directory name must be recognised as a slot")
+	}
+	if !c.IsSlot("my-drupal-site2") {
+		t.Error("numbered slots must still match")
+	}
+	for _, no := range []string{"my-drupal-siteX", "other", "my-drupal-site-2", ""} {
+		if c.IsSlot(no) {
+			t.Errorf("%q must not match", no)
+		}
+	}
+	// Starting another one still gets its own name.
+	if got := c.SlotName(1); got != "my-drupal-site1" {
+		t.Errorf("slot 1 = %q", got)
+	}
+}
+
+// The same rule under a configured pattern: trip1 is both "slot 1" and the bare
+// name, and neither reading may swallow another project.
+func TestConfiguredPatternStillBounded(t *testing.T) {
+	c := load(t, write(t, "trip1", map[string]string{
+		"compose.yaml": "services: {}\n",
+		"workmux.json": `{"name":"trip1","stack":{"slots":"trip{n}"}}`,
+	}))
+	for _, yes := range []string{"trip1", "trip9", "trip42"} {
+		if !c.IsSlot(yes) {
+			t.Errorf("%q should match trip{n}", yes)
+		}
+	}
+	// "trip" is the pattern minus its number, not a project anyone has. Matching it
+	// would let this repo claim someone else's stack.
+	for _, no := range []string{"trip", "trippy", "atrip1", "trip1x"} {
+		if c.IsSlot(no) {
+			t.Errorf("%q must not match", no)
+		}
+	}
+}

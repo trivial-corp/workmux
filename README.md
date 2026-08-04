@@ -156,18 +156,70 @@ comes from the same JSON:
 - [ ] Release binaries, Homebrew, and an npm package that ships the binary
 - [ ] Paired device tokens and TLS, for the remote/mobile case
 
-## Development
+## Using it on another project
+
+Point it anywhere; nothing has to be installed in the project itself:
 
 ```
-make test     # go test ./...
-make lint     # gofmt check + go vet
-make build    # ./workmux
-make run      # build and serve this repo
+workmux --root ~/code/my-drupal-site
 ```
 
-Tests use real git repositories in temp directories rather than mocks: every
-claim this tool makes about worktrees, branches and commit counts comes from
-git's own output, so a fake would only test the fake.
+With no `workmux.json` it reads the repo: the name from the directory, a stack
+from whatever compose file it finds, and Claude Code as the agent. A stack the
+project already has running is recognised whether it's named after the directory
+(what `docker compose up` does) or numbered per worktree.
+
+Two things are worth setting for a project that isn't structured around
+per-worktree stacks:
+
+```jsonc
+{
+  "stack": { "url": "http://localhost:8080" },   // so there's an Open button
+  "agent": null                                   // if you don't use one here
+}
+```
+
+## Developing workmux
+
+**Run it from source, against any project. No build, no install, no CI:**
+
+```
+make dev ROOT=~/code/my-drupal-site          # or PORT=4321 to sit beside another
+```
+
+That's `go run`, so a code change is a Ctrl-C and a re-run — about a second. Two
+things make it a debug loop rather than a guessing game:
+
+- **`--dev` serves the frontend from `internal/web/dist` instead of the copy
+  embedded in the binary**, with caching off. Editing the UI is a refresh.
+- **Every subprocess is logged** with its duration and exit code. Every fact this
+  tool reports comes from a `git`, `docker`, `gh` or agent-CLI call, so a wrong
+  dashboard is nearly always a surprising command result, and this shows you which
+  one:
+
+  ```
+  16:24:01    9ms git -C /repo symbolic-ref --quiet --short refs/remotes/origin/HEAD  exit 1:
+  16:24:01   16ms git -C /repo worktree list --porcelain
+  16:24:02  310ms docker compose ls --all --format json
+  ```
+
+  `--verbose` alone gives you that against the embedded frontend.
+
+```
+make watch ROOT=~/code/app    # restart on every .go change (watchexec or entr)
+make debug ROOT=~/code/app    # under delve, with breakpoints
+make install                  # ~/go/bin/workmux — what `bin/dev serve` finds
+make test                     # go test ./...
+make lint                     # gofmt check + go vet
+```
+
+Nothing here needs a push, a tag or a CI run. CI exists to catch what a laptop
+misses (Linux, and the four cross-compiled binaries), not to stand between you and
+running the code.
+
+Tests use real git repositories in temp directories rather than mocks: every claim
+this tool makes about worktrees, branches and commit counts comes from git's own
+output, so a fake would only test the fake.
 
 ## License
 

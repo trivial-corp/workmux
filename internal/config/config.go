@@ -134,7 +134,14 @@ func Load(root string) (*Config, error) {
 	if c.Stack != nil {
 		pat = c.Stack.Slots
 	}
-	c.slotRe = regexp.MustCompile("^" + strings.Replace(regexp.QuoteMeta(pat), `\{n\}`, "[0-9]+", 1) + "$")
+	// A slot is the pattern with a number — and also the project name exactly,
+	// because `docker compose up` names the project after the directory. Without
+	// that, the single stack somebody already has running (the common case when
+	// pointing this at an existing project) matched nothing and the dashboard
+	// claimed no app was up. The name, not the pattern-minus-{n}: "trip{n}" must
+	// not start claiming a project called "trip".
+	numbered := strings.Replace(regexp.QuoteMeta(pat), `\{n\}`, "[0-9]+", 1)
+	c.slotRe = regexp.MustCompile("^(?:" + numbered + "|" + regexp.QuoteMeta(c.Name) + ")$")
 	return c, nil
 }
 

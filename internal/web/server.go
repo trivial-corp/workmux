@@ -10,10 +10,13 @@ package web
 import (
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,6 +45,23 @@ type Server struct {
 	// Origins that may open a WebSocket. CORS does not cover WebSockets, so
 	// without this any page you visited could open one against localhost.
 	Origins []string
+	// DevDir serves the frontend from disk instead of the embedded copy, so
+	// editing the UI is a refresh rather than a rebuild. Empty in a release.
+	DevDir string
+	// Verbose logs each request. Paired with run.Trace it explains a wrong
+	// dashboard: you see the request, then every subprocess it caused.
+	Verbose bool
+}
+
+// assets is where the frontend is read from: disk in dev, the binary otherwise.
+func (s *Server) assets() (fs.FS, error) {
+	if s.DevDir != "" {
+		if _, err := os.Stat(filepath.Join(s.DevDir, "index.html")); err != nil {
+			return nil, fmt.Errorf("--dev: no index.html in %s", s.DevDir)
+		}
+		return os.DirFS(s.DevDir), nil
+	}
+	return fs.Sub(ui, "dist")
 }
 
 // Handler wires the routes.
@@ -58,6 +78,10 @@ func (s *Server) Handler() http.Handler {
 // cookie, so a URL pasted on a phone doesn't leave the token in every referrer.
 func (s *Server) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.Verbose {
+			started := time.Now()
+			defer func() { log.Printf("%s %s  %s", r.Method, r.URL.Path, time.Since(started).Round(time.Millisecond)) }()
+		}
 		if !s.authorized(r) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="workmux"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
@@ -122,7 +146,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
-	dist, err := fs.Sub(ui, "dist")
+	dist, err := s.assets()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "no frontend embedded"})
 		return
@@ -146,8 +170,9 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", contentType(path))
-	if path != "index.html" {
-		// Hashed asset names make these immutable; index.html must never be.
+	if path != "index.html" && s.DevDir == "" {
+		// Hashed asset names make these immutable; index.html must never be, and
+		// in dev nothing is — you'd be debugging a file the browser kept.
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-store")

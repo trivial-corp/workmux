@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+// Trace, when set, is called after every command with what ran, how long it took
+// and what it returned. Nil in normal operation; --verbose points it at the log.
+// This is the debug view that matters: every fact workmux reports comes from one
+// of these, so a wrong dashboard is nearly always a surprising command result.
+var Trace func(argv []string, dur time.Duration, code int, out string)
+
 // Result is what a command did. Out is stdout+stderr, trimmed.
 type Result struct {
 	Code int
@@ -68,7 +74,9 @@ func Env(dir string, env []string, timeout time.Duration, argv ...string) Result
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
+	started := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(started)
 
 	res := Result{Out: strings.TrimRight(buf.String(), "\n")}
 	switch {
@@ -89,6 +97,9 @@ func Env(dir string, env []string, timeout time.Duration, argv ...string) Result
 				res.Out = err.Error()
 			}
 		}
+	}
+	if Trace != nil {
+		Trace(argv, elapsed, res.Code, res.Out)
 	}
 	return res
 }
