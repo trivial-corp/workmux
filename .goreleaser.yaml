@@ -27,12 +27,16 @@ archives:
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     files: [README.md, LICENSE]
 
-checksums:
+checksum:
   name_template: checksums.txt
 
 # `brew install trivial-corp/tap/workmux`. Needs a homebrew-tap repo in the org,
 # and both it and this repo public — Homebrew can't fetch from a private release.
-brews:
+#
+# A cask, not a formula: we ship a pre-built binary, which is what casks are for
+# now, and goreleaser is phasing `brews` out. Casks are macOS-only, so Linux
+# installs via scripts/install.sh, the container image, or `go install`.
+homebrew_casks:
   - name: workmux
     repository:
       owner: trivial-corp
@@ -40,10 +44,14 @@ brews:
     homepage: https://github.com/trivial-corp/workmux
     description: Run several coding agents at once, one git worktree each, from a browser
     license: MIT
-    dependencies:
-      - name: git
-    test: |
-      assert_match "workmux", shell_output("#{bin}/workmux --version")
+    hooks:
+      post:
+        # An unsigned binary downloaded by brew is quarantined, and macOS then
+        # refuses to run it with a message that says nothing useful.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/workmux"]
+          end
 
 changelog:
   sort: asc

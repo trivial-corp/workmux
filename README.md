@@ -40,7 +40,7 @@ Two details it gets right, because both were bugs first:
 ## Install
 
 ```sh
-brew install trivial-corp/tap/workmux            # macOS / Linuxbrew
+brew install trivial-corp/tap/workmux            # macOS
 curl -fsSL https://raw.githubusercontent.com/trivial-corp/workmux/main/scripts/install.sh | sh
 go install github.com/trivial-corp/workmux/cmd/workmux@latest
 docker run ...                                   # see Docker below
@@ -51,8 +51,12 @@ All of them give you the same single static binary. Requires **git**; `docker`
 only if your project has a stack and `gh` only for PR titles — both optional, and
 their absence costs you that column and nothing else. macOS and Linux.
 
-> While this repo is private, `brew` and the install script can't reach the
-> release assets. `go install` works with repo access (`GOPRIVATE=github.com/trivial-corp`),
+Homebrew gets a **cask** rather than a formula, because what ships is a pre-built
+binary — which makes it macOS-only; on Linux use the install script, the container
+image, or `go install`.
+
+> While this repo is private, `brew` and the install script can't reach the release
+> assets. `go install` works with repo access (`GOPRIVATE=github.com/trivial-corp`),
 > and building from source always works.
 
 ### Docker
