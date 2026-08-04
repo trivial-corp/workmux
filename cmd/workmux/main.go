@@ -28,6 +28,7 @@ import (
 	"github.com/trivial-corp/workmux/internal/presets"
 	"github.com/trivial-corp/workmux/internal/prs"
 	"github.com/trivial-corp/workmux/internal/run"
+	stackpkg "github.com/trivial-corp/workmux/internal/stack"
 	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/web"
 	"github.com/trivial-corp/workmux/internal/work"
@@ -262,6 +263,38 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "  root: %s\n  Ctrl-C to stop.\n\n", root)
 
+	// Seed the log with what this instance is. It opened on "Nothing logged yet"
+	// until you happened to do something, which made it look broken rather than
+	// quiet — and this is the information you want first when it misbehaves.
+	web.Journal.Note("workmux %s serving %s (%s)", version, cfg.Name, root)
+	web.Journal.Note("listening on %s · terminals %s · token %s", addr,
+		onOff(!opts.noTerm), onOff(token != ""))
+	if cfg.HasStack() {
+		web.Journal.Note("stack %s · slots %s · next %s", cfg.Stack.Compose, cfg.Stack.Slots,
+			stackpkg.NextFreeSlot(cfg, stackpkg.Running(cfg)))
+	} else {
+		web.Journal.Note("no stack configured — worktrees, agents and sessions only")
+	}
+	if cfg.Agent.Command == "" {
+		web.Journal.Note("no agent configured")
+	} else {
+		web.Journal.Note("agent %s · state in %s · mcp %s", cfg.Agent.Command,
+			or(cfg.JobsDir(), "nowhere"), onOff(cfg.Agent.MCP != ""))
+	}
+	// Every fact this dashboard shows comes from a subprocess, so a command that
+	// fails is the explanation for a wrong number. Those always get logged; the full
+	// trace stays behind --verbose.
+	prevTrace := run.Trace
+	run.Trace = func(argv []string, dur time.Duration, code int, out string) {
+		if prevTrace != nil {
+			prevTrace(argv, dur, code, out)
+		}
+		if code != 0 {
+			web.Journal.Note("%s exited %d after %s: %s", argv[0], code,
+				dur.Round(time.Millisecond), firstLine(out))
+		}
+	}
+
 	if opts.open {
 		openBrowser(where + tokenQuery(token))
 	}
@@ -461,6 +494,20 @@ func lanAddress() string {
 		}
 	}
 	return ""
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+func or(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // firstLine keeps a failure to one line in the trace; the full output is still

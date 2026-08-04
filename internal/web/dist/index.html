@@ -4,170 +4,295 @@
 <title>workmux</title>
 <link rel="stylesheet" href="/vendor/xterm.css">
 <style>
-  :root { color-scheme: dark; --bg:#0e0e13; --panel:#15151c; --elev:#1a1a22; --ink:#e7e7ee;
-          --dim:#9a9aae; --line:#26262f; --ok:#4ade80; --warn:#fbbf24; --live:#60a5fa; }
-  * { box-sizing: border-box; min-width: 0; }
-  html, body { height: 100%; }
-  body { margin:0; background:var(--bg); color:var(--ink); overflow:hidden;
-         font:14px/1.45 ui-sans-serif,-apple-system,system-ui,sans-serif;
-         display:flex; flex-direction:column; }
-  header { display:flex; gap:10px; align-items:baseline; padding:11px 14px;
-           border-bottom:1px solid var(--line); flex:0 0 auto; }
-  h1 { margin:0; font-size:14px; font-weight:600; letter-spacing:.02em; }
-  .meta { color:var(--dim); font-size:12px; overflow-wrap:anywhere; }
-  main { flex:1 1 auto; display:grid; min-height:0;
-         grid-template-columns:minmax(0,290px) minmax(0,1.15fr) minmax(0,1fr); }
-  /* Below 1200px the diff would be unreadable beside a terminal, so it becomes a
-     tab rather than a third column. */
-  @media (max-width: 1200px) {
-    main { grid-template-columns:minmax(0,280px) minmax(0,1fr); }
-    .changes { display:none; }
-    main.changes-on .changes { display:flex; }
-    main.changes-on .pane { display:none; }
-  }
-  .list { border-right:1px solid var(--line); overflow-y:auto; padding:10px; display:grid;
-          gap:7px; align-content:start; min-width:0; }
-  .w { background:var(--panel); border:1px solid var(--line); border-radius:9px;
-       padding:9px 10px; cursor:pointer; }
-  .w.on { border-color:#3a3a55; background:var(--elev); }
-  .top { display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; }
-  .br { font-weight:600; overflow-wrap:anywhere; font-size:13px; }
-  .tag { font-size:10.5px; color:var(--dim); border:1px solid var(--line); border-radius:5px;
-         padding:0 5px; white-space:nowrap; }
-  .tag.live { color:var(--live); border-color:#2b4a72; }
-  .tag.blocked { color:var(--warn); border-color:#5a4416; }
-  .tag.up { color:var(--ok); border-color:#1f5133; }
-  .sub { color:var(--dim); font-size:11.5px; margin-top:3px; overflow-wrap:anywhere; }
-  .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
-  .changes { border-left:1px solid var(--line); }
-  .chbody { flex:1 1 auto; overflow-y:auto; padding:8px 10px; }
-  .chsect { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.05em;
-            margin:10px 0 5px; display:flex; justify-content:space-between; gap:8px; }
-  .chrow { display:flex; gap:8px; align-items:baseline; padding:4px 6px; border-radius:6px;
-           cursor:pointer; font-size:12.5px; }
-  .chrow:hover { background:var(--elev); }
-  .chrow.on { background:var(--elev); }
-  .chrow .f { flex:1 1 auto; overflow-wrap:anywhere; font-family:ui-monospace,Menlo,monospace;
-              font-size:11.5px; }
-  .chrow .st { color:var(--dim); font-size:10.5px; width:2.2em; text-align:center;
-               font-family:ui-monospace,Menlo,monospace; }
-  .chrow .n { color:var(--dim); font-size:10.5px; white-space:nowrap; }
-  .chrow .n .a { color:var(--ok); } .chrow .n .d { color:#f87171; }
-  .chcommit { font-family:inherit; }
-  .chcommit .sha { color:var(--dim); font-family:ui-monospace,Menlo,monospace; font-size:11px; }
-  .chcommit .local { color:var(--warn); font-size:10px; }
-  .diff { flex:1 1 auto; overflow:auto; font-family:ui-monospace,Menlo,monospace;
-          font-size:11.5px; line-height:1.45; padding:0 0 10px; }
-  .diff .hd { position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line);
-              padding:6px 10px; display:flex; gap:8px; align-items:center; z-index:1;
-              font-family:inherit; }
-  .diff .l { white-space:pre; padding:0 10px; }
-  .diff .l.add { background:#0e2a17; color:#a7f3c0; }
-  .diff .l.del { background:#2c1114; color:#fca5a5; }
-  .diff .l.hunk { color:#93b4ff; background:#131a2b; }
-  .diff .l.meta { color:var(--dim); }
-  .bar { display:flex; gap:6px; align-items:center; padding:7px 10px; flex:0 0 auto;
-         border-bottom:1px solid var(--line); overflow-x:auto; }
-  .b { background:var(--elev); color:var(--ink); border:1px solid var(--line); border-radius:6px;
-       padding:3px 9px; font-size:12px; cursor:pointer; white-space:nowrap; font-family:inherit; }
-  .b:hover { border-color:#3a3a55; }
-  .b.on { border-color:#4a6ea8; color:#cfe0ff; }
-  .b.dead { color:var(--dim); text-decoration:line-through; }
-  .term { flex:1 1 auto; min-height:0; padding:6px 2px 2px 8px; }
-  .term .xterm { height:100%; }
-  .empty { color:var(--dim); padding:14px; font-size:13px; }
-  .empty.hint { padding-top:0; font-size:11.5px; opacity:.75; }
-  .spacer { flex:1 1 auto; }
-  header .b { flex:0 0 auto; }
-  .scrim { position:fixed; inset:0; background:#000a; display:none; z-index:9; }
-  .scrim.on { display:block; }
-  .sheet { position:fixed; z-index:10; display:none; flex-direction:column;
-           background:var(--panel); border:1px solid var(--line); border-radius:12px;
-           inset:6vh 50% 6vh 50%; width:min(720px, 94vw); transform:translateX(-50%);
-           left:50%; right:auto; }
-  .sheet.on { display:flex; }
-  .shead, .sfoot { display:flex; gap:8px; align-items:center; padding:10px 12px; flex:0 0 auto; }
-  .shead { border-bottom:1px solid var(--line); }
-  .sfoot { border-top:1px solid var(--line); }
-  .sbody { flex:1 1 auto; overflow-y:auto; padding:12px; display:grid; gap:9px;
-           align-content:start; }
-  .sheet textarea, .sheet input, .sheet select {
-    width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line);
-    border-radius:7px; padding:8px 9px; font:inherit; font-size:13px; }
-  .sheet textarea { min-height:96px; resize:vertical; }
-  .sheet label { font-size:11.5px; color:var(--dim); display:grid; gap:4px; }
-  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-  .srv { border:1px solid var(--line); border-radius:8px; padding:8px 9px; display:grid; gap:3px; }
-  .srv .nm { font-weight:600; font-size:12.5px; overflow-wrap:anywhere; }
-  .srv .dt { font-size:11px; color:var(--dim); overflow-wrap:anywhere; }
-  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; }
-  .dot.ok { background:var(--ok); } .dot.fail { background:#f87171; }
-  .dot.auth { background:var(--warn); } .dot.pending { background:var(--dim); }
-  .logline { font-family:ui-monospace,Menlo,monospace; font-size:11px; display:flex; gap:8px; }
-  .logline.bad { color:#fca5a5; } .logline.warn { color:var(--warn); }
-  .logline .t { color:var(--dim); flex:0 0 auto; }
-  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
-           background:var(--elev); border:1px solid #5a4416; color:var(--warn);
-           padding:8px 12px; border-radius:8px; font-size:12.5px; max-width:90vw;
-           z-index:20; display:none; }
-  .toast.on { display:block; }
-  @media (max-width: 820px) { .sheet { inset:0; width:100vw; border-radius:0; transform:none; left:0; } }
-  .keys { display:none; gap:5px; padding:6px 8px; border-top:1px solid var(--line);
-          flex:0 0 auto; overflow-x:auto; }
-  /* ⤢ — the terminal takes the window; everything else gets out of the way. */
-  body.full header, body.full .list, body.full nav { display:none; }
-  body.full main { grid-template-columns:1fr; }
-  nav { display:none; }
-  /* One surface at a time on a phone, with the key bar a terminal needs there. */
-  @media (max-width: 820px) {
-    main { grid-template-columns:1fr; }
-    .pane { display:none; }
-    main.session .pane { display:flex; }
-    main.session .list { display:none; }
-    .keys { display:flex; }
-    nav { display:flex; flex:0 0 auto; border-top:1px solid var(--line); }
-    nav button { flex:1; background:none; border:0; color:var(--dim); padding:10px;
-                 font:inherit; font-size:12px; }
-    nav button.on { color:var(--ink); }
-  }
+/* workmux — a patch bay for parallel work.
+ *
+ * The design idea: each piece of work is a channel strip. A status rail down its
+ * left edge carries the one thing you need at a glance, the machine strings
+ * (branches, shas, slots, counts) are set in mono because they *are* the content,
+ * and colour is spent only on state — never on decoration. Strips are grouped into
+ * bands, so the ordering the server computes is visible instead of implied.
+ */
+:root {
+  color-scheme: dark;
+  --ink:#0A0C0F; --panel:#11151A; --elev:#161B22; --elev-2:#1B212A;
+  --line:#212932; --line-soft:#181E26;
+  --t1:#E4E9F0; --t2:#A9B4C4; --t3:#77839A;
+  --wants:#F0B429; --live:#2ED3C6; --idle:#5C6675; --up:#4ADE80;
+  --danger:#F27272; --accent:#8AA0FF;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --r:7px;
+}
+* { box-sizing:border-box; min-width:0; }
+html, body { height:100%; }
+body { margin:0; background:var(--ink); color:var(--t1); font:13px/1.5 var(--sans);
+       overflow:hidden; display:flex; flex-direction:column;
+       -webkit-font-smoothing:antialiased; }
+button { font:inherit; color:inherit; }
+::selection { background:#2b3a55; }
+
+/* ── header ──────────────────────────────────────────────────────────────── */
+header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12px;
+         height:46px; border-bottom:1px solid var(--line); background:var(--panel); }
+.brand { font-family:var(--mono); font-size:13px; letter-spacing:-0.01em; white-space:nowrap;
+         display:flex; align-items:baseline; gap:5px; flex:0 0 auto; }
+.brand .proj { font-weight:600; color:var(--t1); }
+.brand .tool { color:var(--t3); font-size:11px; }
+.stats { display:flex; gap:0; align-items:center; flex:1 1 auto; overflow:hidden;
+         font-family:var(--mono); font-size:11px; color:var(--t3); }
+.stats span { padding:0 9px; border-left:1px solid var(--line-soft); white-space:nowrap; }
+.stats span:first-child { border-left:0; padding-left:0; }
+.acts { display:flex; gap:6px; flex:0 0 auto; }
+
+/* ── buttons: one shape, three weights ───────────────────────────────────── */
+.b { background:transparent; border:1px solid var(--line); border-radius:var(--r);
+     padding:4px 9px; font-size:12px; cursor:pointer; white-space:nowrap;
+     color:var(--t2); transition:border-color .12s, color .12s, background .12s; }
+.b:hover { border-color:#31404f; color:var(--t1); background:var(--elev); }
+.b:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.b.primary { border-color:#37436b; color:#c9d4ff; background:#1a1f33; }
+.b.primary:hover { border-color:var(--accent); }
+.b.danger:hover { border-color:#5c2b2b; color:var(--danger); background:#1e1315; }
+.b.on { border-color:var(--accent); color:#cfe0ff; }
+.b.dead { color:var(--t3); text-decoration:line-through; }
+.b.icon { font-family:var(--mono); }
+.b[disabled] { opacity:.5; cursor:default; }
+.group { display:flex; gap:6px; padding-right:8px; margin-right:2px;
+         border-right:1px solid var(--line-soft); }
+.group:last-child { border-right:0; padding-right:0; }
+
+/* ── layout ──────────────────────────────────────────────────────────────── */
+main { flex:1 1 auto; display:grid; min-height:0;
+       grid-template-columns:minmax(0,304px) minmax(0,1.1fr) minmax(0,0.95fr); }
+.list, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
+.list { overflow-y:auto; border-right:1px solid var(--line); background:var(--panel); }
+.changes { border-left:1px solid var(--line); background:var(--panel); }
+
+/* ── bands: the ordering, made visible ───────────────────────────────────── */
+.band { border-bottom:1px solid var(--line-soft); padding:0 0 6px; }
+.band:last-child { border-bottom:0; }
+.band > h2 { margin:0; padding:12px 12px 6px; font:inherit; font-size:10px; font-weight:600;
+             letter-spacing:.15em; text-transform:uppercase; color:var(--t3);
+             display:flex; align-items:center; gap:8px; }
+.band > h2 .count { font-family:var(--mono); letter-spacing:0; font-weight:400; opacity:.7; }
+.band > h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
+.band[data-tone="wants"] > h2 { color:var(--wants); }
+
+/* ── the channel strip ───────────────────────────────────────────────────── */
+.strip { display:flex; gap:10px; padding:7px 12px 8px 0; cursor:pointer; position:relative;
+         border-left:0; }
+.strip:hover { background:var(--elev); }
+.strip[aria-selected="true"] { background:var(--elev-2); box-shadow:inset 0 0 0 1px #2b3444; }
+.strip[aria-selected="true"] .rail { width:3px; box-shadow:0 0 10px 0 currentColor; }
+.strip[aria-selected="true"] .branch { color:#fff; }
+.strip .rail { flex:0 0 3px; border-radius:0 2px 2px 0; background:var(--idle);
+               margin-right:1px; }
+.strip[data-tone="wants"] .rail { background:var(--wants); }
+.strip[data-tone="live"]  .rail { background:var(--live); }
+.strip[data-tone="up"]    .rail { background:var(--up); }
+.strip[data-tone="base"]  .rail { background:#2a313b; }
+/* The one moving thing in the interface: work in progress breathes. */
+@media (prefers-reduced-motion: no-preference) {
+  .strip[data-tone="live"] .rail { animation:breathe 2.6s ease-in-out infinite; }
+}
+@keyframes breathe { 0%,100% { opacity:1 } 50% { opacity:.45 } }
+.strip .body { flex:1 1 auto; display:grid; gap:3px; }
+.strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--t1);
+                 overflow-wrap:anywhere; }
+.strip[data-tone="base"] .branch { font-weight:400; color:var(--t2); }
+.strip .said { font-size:11.5px; color:var(--t2); overflow:hidden; text-overflow:ellipsis;
+               white-space:nowrap; }
+.strip .chips { display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center;
+                font-family:var(--mono); font-size:10.5px; color:var(--t3); }
+.chip { display:inline-flex; align-items:center; gap:4px; }
+.chip.state { color:var(--wants); }
+.chip.app { color:var(--up); }
+.chip.pr { color:var(--t3); }
+.chip.pr::before { content:""; }
+.dot { width:5px; height:5px; border-radius:50%; background:currentColor; flex:0 0 auto; }
+
+/* ── session pane ────────────────────────────────────────────────────────── */
+.bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:7px 10px;
+       border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:none;
+       background:var(--panel); }
+.bar::-webkit-scrollbar { display:none; }
+.bar .who { font-family:var(--mono); font-size:11px; color:var(--t3); white-space:nowrap;
+            overflow:hidden; text-overflow:ellipsis; }
+.term { flex:1 1 auto; min-height:0; padding:8px 4px 4px 10px; background:var(--ink); }
+.term .xterm { height:100%; }
+.hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
+.hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
+.hollow p { margin:0; font-size:12.5px; color:var(--t3); }
+.hollow h3 { font-family:var(--mono); font-size:13px; color:var(--t1); }
+.facts { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr; gap:5px 14px;
+         font-family:var(--mono); font-size:11.5px; align-items:baseline; }
+.facts dt { color:var(--t3); text-align:right; }
+.facts dd { margin:0; color:var(--t2); overflow-wrap:anywhere; }
+.keys { display:none; gap:5px; padding:6px 8px; border-top:1px solid var(--line);
+        flex:0 0 auto; overflow-x:auto; scrollbar-width:none; }
+
+/* ── changes ─────────────────────────────────────────────────────────────── */
+.chbody { flex:1 1 auto; overflow-y:auto; padding:0 0 12px; }
+.chsect { padding:12px 12px 5px; font-size:10px; font-weight:600; letter-spacing:.15em;
+          text-transform:uppercase; color:var(--t3); display:flex; gap:8px; align-items:center; }
+.chsect .count { font-family:var(--mono); letter-spacing:0; font-weight:400; }
+.chsect::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
+.chrow { display:flex; gap:10px; align-items:baseline; padding:4px 12px; cursor:pointer; }
+.chrow:hover { background:var(--elev); }
+.chrow[aria-selected="true"] { background:var(--elev-2); }
+.chrow .st { font-family:var(--mono); font-size:10px; color:var(--t3); flex:0 0 2ch;
+             text-align:center; }
+.chrow .f { flex:1 1 auto; font-family:var(--mono); font-size:11.5px; overflow-wrap:anywhere; }
+.chrow .n { font-family:var(--mono); font-size:10.5px; white-space:nowrap; color:var(--t3); }
+.chrow .n .a { color:var(--up); } .chrow .n .d { color:var(--danger); }
+/* A sha is a fixed-width label, and it gets its own room: it ran into the subject. */
+.chrow .sha { flex:0 0 9ch; font-family:var(--mono); font-size:10.5px; color:var(--accent);
+              opacity:.85; }
+.chrow .subject { flex:1 1 auto; font-size:12px; color:var(--t2); overflow-wrap:anywhere; }
+.chrow .local { font-family:var(--mono); font-size:10px; color:var(--wants); flex:0 0 auto; }
+.diff { flex:1 1 auto; overflow:auto; }
+.diff .hd { position:sticky; top:0; z-index:1; background:var(--panel);
+            border-bottom:1px solid var(--line); padding:7px 10px; display:flex; gap:8px;
+            align-items:center; }
+.diff .hd .name { font-family:var(--mono); font-size:11px; color:var(--t2); overflow:hidden;
+                  text-overflow:ellipsis; white-space:nowrap; }
+.diff .l { white-space:pre; padding:0 10px; font-family:var(--mono); font-size:11.5px;
+           line-height:1.5; }
+.diff .l.add { background:#0d2618; color:#a7f3c0; }
+.diff .l.del { background:#261013; color:#fcaaaa; }
+.diff .l.hunk { background:#131a2b; color:#93b4ff; }
+.diff .l.meta { color:var(--t3); }
+
+/* ── sheets ──────────────────────────────────────────────────────────────── */
+.scrim { position:fixed; inset:0; background:#000c; display:none; z-index:9; }
+.scrim.on { display:block; }
+.sheet { position:fixed; z-index:10; display:none; flex-direction:column; left:50%; top:50%;
+         transform:translate(-50%,-50%); width:min(680px,94vw); max-height:min(84vh,780px);
+         background:var(--panel); border:1px solid var(--line); border-radius:12px;
+         box-shadow:0 24px 60px #000a; overflow:hidden; }
+.sheet.on { display:flex; }
+.shead, .sfoot { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:11px 13px; }
+.shead { border-bottom:1px solid var(--line); }
+.shead strong { font-size:13px; font-weight:600; }
+.sfoot { border-top:1px solid var(--line); }
+.sfoot:empty { display:none; }
+.sbody { flex:1 1 auto; overflow-y:auto; padding:13px; display:grid; gap:10px;
+         align-content:start; }
+.sheet textarea, .sheet input, .sheet select {
+  width:100%; background:var(--ink); color:var(--t1); border:1px solid var(--line);
+  border-radius:var(--r); padding:8px 9px; font:inherit; font-size:13px; }
+.sheet textarea { min-height:92px; resize:vertical; font-family:var(--sans); }
+.sheet textarea:focus, .sheet input:focus, .sheet select:focus {
+  outline:none; border-color:var(--accent); }
+.sheet label { display:grid; gap:5px; font-size:11px; color:var(--t3);
+               letter-spacing:.02em; }
+.note { font-size:11.5px; color:var(--t3); line-height:1.6; }
+.row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.spacer { flex:1 1 auto; }
+.srv { border:1px solid var(--line); border-radius:var(--r); padding:9px 10px; display:grid;
+       gap:4px; }
+.srv .nm { display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+           font-weight:600; overflow-wrap:anywhere; }
+.srv .scope { font-family:var(--mono); font-size:10px; color:var(--t3); border:1px solid var(--line);
+              border-radius:4px; padding:0 4px; font-weight:400; }
+.srv .dt { font-size:11px; color:var(--t3); overflow-wrap:anywhere; font-family:var(--mono); }
+.srv .dot { width:6px; height:6px; }
+.srv[data-state="ok"] .dot { background:var(--up); }
+.srv[data-state="fail"] .dot { background:var(--danger); }
+.srv[data-state="auth"] .dot { background:var(--wants); }
+.srv[data-state="pending"] .dot { background:var(--idle); }
+.logline { display:flex; gap:9px; align-items:baseline; font-family:var(--mono);
+           font-size:11px; line-height:1.65; }
+.logline .t { color:var(--t3); flex:0 0 auto; }
+.logline .m { overflow-wrap:anywhere; color:var(--t2); }
+.logline.bad .m { color:var(--danger); }
+.logline.warn .m { color:var(--wants); }
+.sbody.log { gap:0; font-variant-numeric:tabular-nums; }
+
+/* ── phone / tablet: exactly one surface, one rule ───────────────────────── */
+nav { display:none; }
+@media (max-width:1280px) {
+  main { grid-template-columns:minmax(0,280px) minmax(0,1fr); }
+  main .changes { display:none; }
+  main[data-surface="changes"] .changes { display:flex; }
+  main[data-surface="changes"] .pane { display:none; }
+}
+@media (max-width:900px) {
+  main { grid-template-columns:1fr; }
+  /* One rule decides what is visible, so two of them can't disagree — which is how
+     the work list and the diff ended up stacked on top of each other.
+     Class selectors, not `main > *`: a class beats an element whatever the order, so
+     the base `.list { display:flex }` was quietly winning against it. */
+  main .list, main .pane, main .changes { display:none; }
+  main[data-surface="work"] .list,
+  main[data-surface="session"] .pane,
+  main[data-surface="changes"] .changes { display:flex; }
+  .keys { display:flex; }
+  nav { display:flex; flex:0 0 auto; border-top:1px solid var(--line); background:var(--panel);
+        padding-bottom:env(safe-area-inset-bottom); }
+  nav button { flex:1; background:none; border:0; color:var(--t3); padding:11px 0 10px;
+               font-size:11px; letter-spacing:.04em; }
+  nav button[aria-current="true"] { color:var(--t1); box-shadow:inset 0 -2px 0 var(--accent); }
+  .sheet { inset:0; width:100%; max-height:100%; border-radius:0; transform:none; left:0; top:0; }
+  .stats span:nth-child(n+3) { display:none; }
+}
+.b.narrow { display:none; }
+@media (max-width:560px) {
+  header { gap:8px; padding:0 10px; }
+  .brand .tool { display:none; }
+  .stats span:nth-child(n+2) { display:none; }
+  .b .lbl { display:none; }
+  .b.wide { display:none; }
+  .b.narrow { display:inline-block; }
+}
+body.full header, body.full .list, body.full .changes, body.full nav { display:none; }
+body.full main { grid-template-columns:1fr; }
+body.full main .pane { display:flex; }
+.toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
+         display:none; max-width:min(90vw,52ch); padding:9px 13px; border-radius:var(--r);
+         background:var(--elev-2); border:1px solid #5c452b; color:var(--wants);
+         font-size:12.5px; box-shadow:0 12px 30px #000a; }
+.toast.on { display:block; }
 </style>
 
 <header>
-  <h1 id="who">workmux</h1>
-  <span class="meta" id="meta">loading…</span>
-  <span class="spacer"></span>
-  <button class="b" id="btn-new" onclick="openSheet('new')">＋ New work</button>
-  <button class="b" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">◇ MCP</button>
-  <button class="b" id="btn-log" onclick="openSheet('log')" title="This server's own log">▤ Log</button>
-  <button class="b" onclick="poll()" title="Refresh">↻</button>
+  <div class="brand"><span class="proj" id="proj">…</span><span class="tool">workmux</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="acts">
+    <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
+      ＋<span class="lbl"> New work</span></button>
+    <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
+      ◇<span class="lbl"> MCP</span></button>
+    <button class="b wide" onclick="openSheet('log')" title="This server's own log">
+      ▤<span class="lbl"> Log</span></button>
+    <button class="b icon narrow" onclick="openSheet('more')" title="More">⋯</button>
+    <button class="b icon" onclick="poll()" title="Refresh">↻</button>
+  </div>
 </header>
 
-<!-- Sheets: fixed header and footer with a scrolling body, because a sticky footer
-     inside a flex column drifted a thousand pixels below the fold on a phone. -->
 <div class="scrim" id="scrim" onclick="closeSheet()"></div>
-<div class="sheet" id="sheet">
-  <div class="shead"><strong id="stitle">…</strong>
-    <span class="spacer"></span>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true">
+  <div class="shead"><strong id="stitle">…</strong><span class="spacer"></span>
     <button class="b" onclick="closeSheet()">Close</button></div>
   <div class="sbody" id="sbody"></div>
   <div class="sfoot" id="sfoot"></div>
 </div>
 
-<main id="main">
+<main id="main" data-surface="work">
   <div class="list" id="list"></div>
   <div class="pane">
     <div class="bar" id="bar"></div>
     <div class="term" id="term"></div>
     <div class="keys" id="keys"></div>
   </div>
-  <div class="changes" id="changes">
+  <div class="changes">
     <div class="bar" id="chbar"></div>
     <div class="chbody" id="chbody"></div>
   </div>
 </main>
 
 <nav>
-  <button id="nav-work" class="on" onclick="setSurface('work')">Work</button>
+  <button id="nav-work" aria-current="true" onclick="setSurface('work')">Work</button>
   <button id="nav-session" onclick="setSurface('session')">Session</button>
   <button id="nav-changes" onclick="setSurface('changes')">Changes</button>
 </nav>
@@ -177,8 +302,12 @@
 <script>
 // Plain DOM on purpose, for now: this is being replaced by a TS build that a mobile
 // app will load as well, and porting the same logic twice is how details get lost.
-const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
-                          if (x != null) n.textContent = x; return n; };
+const el = (t, c, x) => {
+  const n = document.createElement(t);
+  if (c) n.className = c;
+  if (x != null) n.append(x);          // a string or a node — both are appended
+  return n;
+};
 const $ = (id) => document.getElementById(id);
 
 let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null;
@@ -189,48 +318,105 @@ const PANES = new Map();   // session id → {term, fit, ws, dead}
 async function poll() {
   let d;
   try { d = await (await fetch("/api/work")).json(); }
-  catch { $("meta").textContent = "server unreachable"; return; }
+  catch { $("stats").textContent = "server unreachable"; return; }
   STATE = d; WORK = d.work || [];
-  // Several instances at once is normal — one per project, plus one you're
-  // developing — so the tab has to say which. Project first: titles truncate right.
+  // One instance per project is the normal case, so the tab has to say which. The
+  // project comes first because titles truncate from the right.
   document.title = d.name ? d.name + " · workmux" : "workmux";
-  $("who").textContent = d.name ? d.name + " · workmux" : "workmux";
+  $("proj").textContent = d.name || "workmux";
+  const stats = $("stats");
+  stats.textContent = "";
+  const chip = (t) => stats.append(el("span", null, t));
+  const wants = WORK.filter(w => w.tempo === "blocked").length;
+  const live = WORK.filter(w => w.live).length;
+  chip(WORK.length + " trees");
+  if (wants) chip(wants + " waiting");
+  if (live) chip(live + " working");
+  chip(d.base);
+  if (d.stack_enabled) chip("next " + d.next_slot);
   $("btn-mcp").hidden = !(d.agent && d.agent.mcp);
-  $("btn-new").hidden = !(d.agent && d.agent.spawn) && false;   // work is worth making without an agent
-  $("meta").textContent = [WORK.length + " worktrees", "base " + d.base,
-    d.stack_enabled ? "next " + d.next_slot : "no stack",
-    (d.agent && d.agent.name) || "no agent"].join(" · ");
   if (!SEL || !WORK.some(w => w.path === SEL)) SEL = (WORK[0] || {}).path || null;
   renderWork();
   await refreshSessions();
   loadChanges(!CH || CH.for !== SEL);
 }
 
+// Bands make the server's ordering visible. It already sorts by what wants you, but
+// a flat list of identical cards hides that entirely — which is the difference
+// between a list you read and a list you scan.
+const BANDS = [
+  { key:"wants", label:"Wants you",  tone:"wants", has:(w) => w.tempo === "blocked" },
+  { key:"live",  label:"Working",    tone:"live",  has:(w) => w.live || w.tempo === "active" },
+  { key:"up",    label:"App running",tone:"up",    has:(w) => !!w.stack },
+  { key:"rest",  label:"Quiet",      tone:"idle",  has:() => true },
+  { key:"base",  label:"Base checkout", tone:"base", has:() => false },
+];
+
 function renderWork() {
   const list = $("list");
   list.textContent = "";
-  if (!WORK.length) list.append(el("p", "empty", "No worktrees yet."));
-  for (const w of WORK) {
-    const card = el("div", "w" + (w.path === SEL ? " on" : ""));
-    const top = el("div", "top");
-    top.append(el("span", "br", w.branch));
-    if (w.is_default) top.append(el("span", "tag", "base"));
-    if (w.live) top.append(el("span", "tag live", "working"));
-    if (w.tempo === "blocked") top.append(el("span", "tag blocked", "needs input"));
-    if (w.stack) top.append(el("span", "tag up", "app " + w.stack.slot + " " + w.stack.up + "/" + w.stack.total));
-    for (const n of (w.prs || []).slice(0, 3)) top.append(el("span", "tag", "#" + n));
-    if (w.behind > 0) top.append(el("span", "tag", "⇣" + w.behind));
-    card.append(top);
-    const bits = [];
-    for (const a of w.agents || []) bits.push((a.name || a.id) + (a.tempo ? " · " + a.tempo : ""));
-    for (const s of w.sessions || []) bits.push("▸ " + (s.title || s.kind));
-    if (bits.length) card.append(el("div", "sub", bits.join("  —  ")));
-    card.onclick = () => {
-      SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
-      renderWork(); renderBar(); loadChanges(true);
-    };
-    list.append(card);
+  if (!WORK.length) {
+    list.append(el("div", "hollow", "No worktrees yet."));
+    return;
   }
+  const taken = new Set();
+  for (const band of BANDS) {
+    const rows = WORK.filter(w => {
+      if (taken.has(w.path)) return false;
+      const mine = band.key === "base" ? w.is_default : (!w.is_default && band.has(w));
+      if (mine) taken.add(w.path);
+      return mine;
+    });
+    if (!rows.length) continue;
+    const sec = el("section", "band");
+    sec.dataset.tone = band.tone;
+    const h = el("h2", null, band.label);
+    h.append(el("span", "count", String(rows.length)));
+    sec.append(h);
+    for (const w of rows) sec.append(strip(w, band.tone));
+    list.append(sec);
+  }
+}
+
+function strip(w, tone) {
+  const row = el("article", "strip");
+  row.dataset.tone = tone;
+  row.setAttribute("aria-selected", w.path === SEL ? "true" : "false");
+  row.append(el("i", "rail"));
+  const body = el("div", "body");
+  body.append(el("div", "branch", w.branch));
+
+  // What it last said, in its own words. This is the line you actually read.
+  const agent = (w.agents || [])[0];
+  if (agent) {
+    const said = (agent.detail || agent.name || "").trim();
+    if (said) body.append(el("div", "said", said));
+  } else if (w.is_default) {
+    body.append(el("div", "said", "where you're standing — not a change in flight"));
+  }
+
+  const chips = el("div", "chips");
+  const add = (cls, text, dot) => {
+    const c = el("span", "chip " + cls);
+    if (dot) c.append(el("i", "dot"));
+    c.append(document.createTextNode(text));
+    chips.append(c);
+  };
+  if (w.tempo === "blocked") add("state", "needs you", true);
+  else if (w.live) add("state", agent ? (agent.name || "working") : "working", true);
+  if (w.stack) add("app", w.stack.slot + " " + w.stack.up + "/" + w.stack.total, true);
+  for (const n of (w.prs || []).slice(0, 3)) add("pr", "#" + n);
+  if (w.behind > 0) add("", "⇣" + w.behind);
+  if (w.ahead > 0) add("", "⇡" + w.ahead);
+  if (chips.children.length) body.append(chips);
+
+  row.append(body);
+  row.onclick = () => {
+    SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
+    renderWork(); renderBar(); loadChanges(true);
+    if (window.matchMedia("(max-width:900px)").matches) setSurface("session");
+  };
+  return row;
 }
 
 const selected = () => WORK.find(w => w.path === SEL) || null;
@@ -250,106 +436,126 @@ function renderBar() {
   bar.textContent = "";
   if (!STATE) return;
   if (STATE.terminal === false) {
-    bar.append(el("span", "empty", "Terminals are off (--no-terminal)."));
+    bar.append(el("span", "who", "Terminals are off — started with --no-terminal."));
     return;
   }
   const w = selected();
   if (!w) return;
-
-  // Only this worktree's sessions, so a tab always means something here.
-  const mine = SESSIONS.filter(s => s.cwd === SEL);
-  for (const s of mine) {
-    const b = el("button", "b" + (s.id === ACTIVE ? " on" : "") + (s.alive ? "" : " dead"),
-                 s.title || s.kind);
-    b.onclick = () => open(s.id);
-    bar.append(b);
-  }
   const caps = STATE.agent || {};
-  const stack = (label, action, title) => {
-    const b = el("button", "b", label);
-    b.title = title || "";
-    b.onclick = async () => {
-      b.disabled = true; const was = b.textContent; b.textContent = "…";
-      let r;
-      try {
-        r = await (await fetch("/api/stack", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, slot: w.stack ? w.stack.slot : (STATE.next_slot || ""),
-                                 path: SEL }) })).json();
-      } catch { r = { error: "server unreachable" }; }
-      b.disabled = false; b.textContent = was;
-      if (r.error) toast(r.error); else poll();
-    };
-    bar.append(b);
-  };
-  const add = (label, fn, title) => {
-    const b = el("button", "b", label);
+  const mine = SESSIONS.filter(s => s.cwd === SEL);
+  const group = () => { const g = el("div", "group"); bar.append(g); return g; };
+  const btn = (into, label, fn, opts) => {
+    const b = el("button", "b" + (opts && opts.cls ? " " + opts.cls : ""), label);
     b.onclick = fn;
-    if (title) b.title = title;
-    bar.append(b);
+    if (opts && opts.title) b.title = opts.title;
+    into.append(b);
+    return b;
   };
-  // Absent capability, absent button: what this project can't do isn't offered.
-  if (w.agents && w.agents.length && caps.attach) {
-    add("❯ resume", () => start("resume"), "Take over this worktree's agent");
-  } else if (caps.run) {
-    add("＋ " + (caps.name || "agent"), () => start("agent"));
-  }
-  add("＋ shell", () => start("shell"));
-  add("＋ git", () => start("git"));
-  if (w.stack) add("＋ logs", () => start("logs"));
-  if (STATE.stack_enabled) {
-    if (w.stack) {
-      if (w.stack.url) {
-        const open = el("button", "b", "↗ open");
-        open.onclick = () => window.open(w.stack.url, "_blank");
-        bar.append(open);
-      }
-      stack("↻ restart", "restart", "Restart this work's containers");
-      stack("■ stop", "stop", "Stop this work's containers");
-    } else {
-      stack("▶ app", "up", "Start containers for this work — it doesn't need them to exist");
+
+  // Open sessions first: these are the tabs, and they're what you came for.
+  if (mine.length) {
+    const g = group();
+    for (const s of mine) {
+      btn(g, s.title || s.kind, () => open(s.id),
+          { cls: (s.id === ACTIVE ? "on" : "") + (s.alive ? "" : " dead") });
     }
   }
+
+  // Then how to start one. The agent is the primary action; everything else is a tool.
+  const g2 = group();
+  if (w.agents && w.agents.length && caps.attach) {
+    btn(g2, "❯ resume", () => start("resume"), { cls: "primary", title: "Take over this worktree's agent" });
+  } else if (caps.run) {
+    btn(g2, "＋ " + (caps.name || "agent"), () => start("agent"), { cls: "primary" });
+  }
+  btn(g2, "＋ shell", () => start("shell"));
+  btn(g2, "＋ git", () => start("git"), { title: "lazygit, tig, or a log" });
+  if (w.stack) btn(g2, "＋ logs", () => start("logs"), { title: "Tail this work's containers" });
+
+  // Then the app, then the branch. Grouped, so a destructive button never sits next
+  // to the one you press all the time.
+  if (STATE.stack_enabled) {
+    const g3 = group();
+    if (w.stack) {
+      if (w.stack.url) btn(g3, "↗ open", () => window.open(w.stack.url, "_blank"),
+                           { title: w.stack.url });
+      btn(g3, "↻ restart", () => stackAction("restart", w));
+      btn(g3, "■ stop", () => stackAction("stop", w), { cls: "danger" });
+    } else {
+      btn(g3, "▶ start app", () => stackAction("up", w),
+          { title: "Containers for this work — it doesn't need them to exist" });
+    }
+  }
+  const g4 = group();
   if (w.behind > 0) {
-    const b = el("button", "b", "⇣ " + w.behind + " from " + w.base);
-    b.title = "Merge " + w.base + " into this branch";
-    b.onclick = async () => {
-      b.disabled = true; b.textContent = "merging…";
+    btn(g4, "⇣ merge " + w.base, async (e) => {
+      const b = e.target; b.disabled = true; b.textContent = "merging…";
       let r;
       try {
         r = await (await fetch("/api/update", { method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: SEL, base: w.base }) })).json();
       } catch { r = { error: "server unreachable" }; }
-      if (r.error) toast(r.error);
+      if (r.error) toast(r.error); else toast("Merged " + w.base + " in");
       poll(); loadChanges(true);
-    };
-    bar.append(b);
+    }, { title: "Bring in the " + w.behind + " commits this branch is behind" });
   }
-  if (STATE.repo_url && (w.prs || []).length) {
-    for (const n of w.prs.slice(0, 2)) {
-      const b = el("button", "b", "#" + n);
-      b.title = "Open PR #" + n;
-      b.onclick = () => window.open(STATE.repo_url + "/pull/" + n, "_blank");
-      bar.append(b);
-    }
+  for (const n of (w.prs || []).slice(0, 2)) {
+    if (STATE.repo_url) btn(g4, "#" + n, () => window.open(STATE.repo_url + "/pull/" + n, "_blank"),
+                            { title: "Open PR #" + n });
   }
   if (ACTIVE) {
-    add("⤢", toggleFull, "Give the terminal the whole window");
-    add("A−", () => setFont(-1), "Smaller");
-    add("A+", () => setFont(1), "Bigger");
-    add("✕", () => kill(ACTIVE), "Kill this session");
+    const g5 = group();
+    btn(g5, "⤢", toggleFull, { cls: "icon", title: "Whole window" });
+    btn(g5, "A−", () => setFont(-1), { cls: "icon" });
+    btn(g5, "A+", () => setFont(1), { cls: "icon" });
+    btn(g5, "✕", () => kill(ACTIVE), { cls: "icon danger", title: "Kill this session" });
   }
   if (!ACTIVE) showEmpty(mine.length);
+}
+
+async function stackAction(action, w) {
+  const slot = w.stack ? w.stack.slot : (STATE.next_slot || "");
+  toast(action === "up" ? "Starting " + slot + "…" : action + "ing " + slot + "…");
+  let r;
+  try {
+    r = await (await fetch("/api/stack", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, slot, path: SEL }) })).json();
+  } catch { r = { error: "server unreachable" }; }
+  if (r.error) toast(r.error);
+  else toast(action === "stop" ? slot + " stopped" : slot + " " + (action === "up" ? "started" : "restarted"));
+  poll();
 }
 
 function showEmpty(existing) {
   const t = $("term");
   t.textContent = "";
-  t.append(el("div", "empty", existing
-    ? "Pick a session above."
-    : "No session here yet. Start one above — it lives in the server, so a reload reattaches."));
-  t.append(el("div", "empty hint", CHORD_HELP));
+  const w = selected();
+  const box = el("div", "hollow");
+  if (existing) {
+    box.append(el("h3", null, "Pick a session above."));
+    t.append(box);
+    return;
+  }
+  box.append(el("h3", null, w ? w.branch : "Nothing selected"));
+  box.append(el("p", null, (w && w.agents && w.agents.length)
+    ? "Resume the agent to take over its session, or open a shell."
+    : "Start the agent, a shell, or a git view. Sessions live in the server, so a reload reattaches."));
+  // Facts about this work, so the pane says something while it's idle.
+  if (w) {
+    const facts = el("dl", "facts");
+    const fact = (k, v) => { facts.append(el("dt", null, k)); facts.append(el("dd", null, v)); };
+    fact("branch", w.branch);
+    fact("base", w.base + (w.behind > 0 ? "  ⇣" + w.behind : "") + (w.ahead > 0 ? "  ⇡" + w.ahead : ""));
+    for (const a of w.agents || []) fact("agent", (a.name || a.id) + (a.tempo ? "  " + a.tempo : ""));
+    if (w.stack) fact("app", w.stack.slot + "  " + w.stack.up + "/" + w.stack.total + " up");
+    else if (STATE && STATE.stack_enabled) fact("app", "not running");
+    if ((w.prs || []).length) fact("prs", w.prs.map(n => "#" + n).join("  "));
+    fact("path", w.path.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"));
+    box.append(facts);
+  }
+  t.append(box);
 }
 
 async function start(kind) {
@@ -598,36 +804,28 @@ function renderChanges() {
   bar.textContent = ""; body.textContent = "";
   const w = selected();
   if (!w) return;
-  // Looking at a diff: the way back has to be obvious, especially on a phone where
-  // it replaced the list entirely.
-  if (CHFILE || CHREV) {
-    const back = el("button", "b", "‹ files");
-    back.onclick = () => { CHFILE = null; CHREV = null; renderChanges(); };
-    bar.append(back);
-    bar.append(el("span", "meta", CHFILE || CHREV));
-    body.textContent = "";
-    body.append(el("div", "empty", "loading…"));
-    return;
-  }
-  const refresh = el("button", "b", "↻");
-  refresh.title = "Re-read the worktree";
+  if (CHFILE || CHREV) return;              // paintDiff owns the pane
+  const refresh = el("button", "b icon", "↻");
+  refresh.title = "Re-read this worktree";
   refresh.onclick = () => loadChanges(true);
   bar.append(refresh);
-  bar.append(el("span", "meta", (CH && CH.branch) || w.branch));
+  bar.append(el("span", "who", (CH && CH.branch) || w.branch));
 
-  if (!CH) { body.append(el("div", "empty", "Couldn't read this worktree.")); return; }
-
+  if (!CH) { body.append(el("div", "hollow", "Couldn't read this worktree.")); return; }
   const files = CH.files || [], commits = CH.commits || [];
-  const head = (label, count) => {
-    const h = el("div", "chsect");
-    h.append(el("span", null, label), el("span", null, String(count)));
-    return h;
+
+  const section = (label, count) => {
+    const h = el("div", "chsect", label);
+    h.append(el("span", "count", String(count)));
+    body.append(h);
   };
-  body.append(head("Working tree", files.length + (files.length === 1 ? " file" : " files")));
-  if (!files.length) body.append(el("div", "empty", "Nothing uncommitted."));
+
+  section("Uncommitted", files.length);
+  if (!files.length) body.append(el("div", "hollow", el("p", null, "Working tree is clean.")));
   for (const f of files) {
-    const row = el("div", "chrow" + (f.path === CHFILE ? " on" : ""));
-    row.append(el("span", "st", (f.x + f.y).trim() || "??"));
+    const row = el("div", "chrow");
+    row.setAttribute("aria-selected", f.path === CHFILE ? "true" : "false");
+    row.append(el("span", "st", (f.x + f.y).trim() || "?"));
     row.append(el("span", "f", f.path));
     const n = el("span", "n");
     if (f.add) n.append(el("span", "a", "+" + f.add));
@@ -638,12 +836,15 @@ function renderChanges() {
     body.append(row);
   }
 
-  body.append(head("Commits ahead of " + (CH.base || w.base || "base"), commits.length));
-  if (!commits.length) body.append(el("div", "empty", "Nothing this base doesn't have."));
+  section("Ahead of " + (CH.base || w.base || "base"), commits.length);
+  if (!commits.length) {
+    body.append(el("div", "hollow", el("p", null, "Nothing this base doesn't already have.")));
+  }
   for (const c of commits) {
-    const row = el("div", "chrow chcommit" + (c.sha === CHREV ? " on" : ""));
-    row.append(el("span", "sha", c.sha));
-    row.append(el("span", "f", c.msg));
+    const row = el("div", "chrow");
+    row.setAttribute("aria-selected", c.sha === CHREV ? "true" : "false");
+    row.append(el("code", "sha", c.sha.slice(0, 8)));
+    row.append(el("span", "subject", c.msg));
     if (!c.pushed) row.append(el("span", "local", "local"));
     row.onclick = () => showCommitDiff(c);
     body.append(row);
@@ -675,22 +876,23 @@ async function showCommitDiff(c) {
 // A diff is rendered line by line rather than as one blob so additions and
 // deletions can be coloured, and so the header can stay put while you scroll.
 function paintDiff(title, diff, error) {
-  const body = $("chbody");
-  body.textContent = "";
-  const box = el("div", "diff");
-  const hd = el("div", "hd");
+  const bar = $("chbar"), body = $("chbody");
+  bar.textContent = ""; body.textContent = "";
   const back = el("button", "b", "‹ files");
   back.onclick = () => { CHFILE = null; CHREV = null; renderChanges(); };
-  hd.append(back, el("span", "meta", title));
-  box.append(hd);
-  if (error) { box.append(el("div", "empty", error)); body.append(box); return; }
-  if (!diff) { box.append(el("div", "empty", "No changes in this file.")); body.append(box); return; }
+  bar.append(back);
+  bar.append(el("span", "who", title));
+
+  const box = el("div", "diff");
+  if (error) { box.append(el("div", "hollow", el("p", null, error))); body.append(box); return; }
+  if (!diff) {
+    box.append(el("div", "hollow", el("p", null, "No changes in this file.")));
+    body.append(box); return;
+  }
   for (const line of diff.split("\n")) {
     let cls = "l";
     if (line.startsWith("@@")) cls += " hunk";
-    else if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ")
-             || line.startsWith("index ") || line.startsWith("new file")
-             || line.startsWith("deleted file")) cls += " meta";
+    else if (/^(\+\+\+|---|diff |index |new file|deleted file|similarity )/.test(line)) cls += " meta";
     else if (line.startsWith("+")) cls += " add";
     else if (line.startsWith("-")) cls += " del";
     box.append(el("div", cls, line || " "));
@@ -706,9 +908,12 @@ function openSheet(which) {
   SHEET = which;
   $("scrim").classList.add("on");
   $("sheet").classList.add("on");
+  $("sbody").className = "sbody";
   if (which === "new") renderNew();
   if (which === "mcp") renderMcp(false);
   if (which === "log") renderLog();
+  if (which === "keys") renderKeysSheet();
+  if (which === "more") renderMore();
 }
 function closeSheet() {
   SHEET = null;
@@ -732,7 +937,7 @@ function renderNew() {
   const baseLbl = el("label", null, "Base branch");
   const base = el("input"); base.placeholder = (STATE && STATE.base) || "main";
   baseLbl.append(base);
-  const note = el("div", "empty hint",
+  const note = el("div", "note",
     "It branches off the remote, copies the gitignored files a worktree needs, starts an agent, "
     + "and starts no containers — attach a stack later if the change turns out to need one.");
   body.append(task, nameLbl, baseLbl, note);
@@ -774,22 +979,24 @@ async function renderMcp(refresh) {
   $("stitle").textContent = "MCP servers";
   const body = $("sbody"), foot = $("sfoot");
   body.textContent = ""; foot.textContent = "";
-  body.append(el("div", "empty", "checking…"));
+  body.append(el("div", "hollow", el("p", null, "checking…")));
   let d;
   try { d = await (await fetch("/api/mcp" + (refresh ? "?refresh=1" : ""))).json(); }
   catch { d = { servers: [] }; }
   body.textContent = "";
   if (!d.enabled) {
-    body.append(el("div", "empty", "This project has no mcp command configured."));
+    body.append(el("div", "hollow", el("p", null, "This project has no mcp command configured.")));
     return;
   }
   const servers = d.servers || [];
-  if (!servers.length) body.append(el("div", "empty", "No MCP servers registered."));
+  if (!servers.length) body.append(el("div", "hollow", el("p", null,
+    "No MCP servers registered. Add one below — it goes through the agent CLI.")));
   for (const x of servers) {
     const card = el("div", "srv");
+    card.dataset.state = x.state;
     const nm = el("div", "nm");
-    nm.append(el("span", "dot " + x.state), document.createTextNode(x.name));
-    if (x.scope) nm.append(el("span", "tag", x.scope));
+    nm.append(el("i", "dot"), document.createTextNode(x.name));
+    if (x.scope) nm.append(el("span", "scope", x.scope));
     card.append(nm);
     card.append(el("div", "dt", x.target || x.command || ""));
     // Registration is not reachability, so the reason goes next to the name.
@@ -850,7 +1057,7 @@ function renderMcpAdd() {
   sl.append(sc); body.append(sl); f.scope = sc;
   field("env", "Environment, one KEY=value per line", "TOKEN=…", "textarea");
   field("headers", "Headers, one Name: value per line", "Authorization: Bearer …", "textarea");
-  body.append(el("div", "empty hint",
+  body.append(el("div", "note",
     "This shells out to the agent CLI, so the CLI stays the source of truth for what's registered."));
 
   const save = el("button", "b on", "Add");
@@ -879,22 +1086,69 @@ let LOG_BAD_ONLY = false;
 async function renderLog() {
   $("stitle").textContent = "Server log";
   const body = $("sbody"), foot = $("sfoot");
+  body.className = "sbody log";
   body.textContent = ""; foot.textContent = "";
   let d;
   try { d = await (await fetch("/api/log")).json(); } catch { d = { lines: [] }; }
   const lines = (d.lines || []).filter(l => !LOG_BAD_ONLY || l.level !== "info");
-  if (!lines.length) body.append(el("div", "empty", "Nothing logged yet."));
+  if (!lines.length) {
+    body.append(el("div", "hollow",
+      el("p", null, LOG_BAD_ONLY ? "No problems logged." :
+        "Nothing yet. Sessions, new work, stack actions and any command that fails land here.")));
+  }
   for (const l of lines) {
     const row = el("div", "logline " + l.level);
-    row.append(el("span", "t", l.at), el("span", null, l.msg));
+    row.append(el("span", "t", l.at), el("span", "m", l.msg));
     body.append(row);
   }
-  const only = el("button", "b" + (LOG_BAD_ONLY ? " on" : ""), "problems only");
+  const only = el("button", "b" + (LOG_BAD_ONLY ? " on" : ""), "Problems only");
   only.onclick = () => { LOG_BAD_ONLY = !LOG_BAD_ONLY; renderLog(); };
-  const again = el("button", "b", "↻");
+  const again = el("button", "b icon", "↻");
   again.onclick = renderLog;
   foot.append(only, again);
   body.scrollTop = body.scrollHeight;
+}
+
+// On a phone the header has room for one action, so the rest live here.
+function renderMore() {
+  $("stitle").textContent = "workmux";
+  const body = $("sbody"), foot = $("sfoot");
+  body.className = "sbody"; body.textContent = ""; foot.textContent = "";
+  const items = [
+    ["MCP servers", "Which servers an agent can reach", () => openSheet("mcp")],
+    ["Server log", "What this instance has been doing", () => openSheet("log")],
+    ["Keyboard", "Chords a phone keyboard can't type", () => openSheet("keys")],
+  ];
+  for (const [label, what, fn] of items) {
+    const row = el("div", "chrow");
+    row.append(el("span", "subject", label), el("span", "n", what));
+    row.onclick = fn;
+    body.append(row);
+  }
+}
+
+// The chords, on request rather than dumped into an empty pane.
+function renderKeysSheet() {
+  $("stitle").textContent = "Keyboard";
+  const body = $("sbody"), foot = $("sfoot");
+  body.className = "sbody"; body.textContent = ""; foot.textContent = "";
+  const rows = [
+    ["⌘⏎ / ⇧⏎", "New line, without submitting"],
+    ["⌘← / ⌘→", "Start and end of the line"],
+    ["⌥← / ⌥→", "A word at a time"],
+    ["⌘⌫ / ⌥⌫", "Kill the line, kill a word"],
+    ["⌘N", "New work"],
+    ["Esc", "Close this"],
+    ["⌃C / ⌃D", "Interrupt, end of input — sent to the program, not the browser"],
+    ["Paste an image", "Goes to the agent through your clipboard"],
+  ];
+  for (const [k, what] of rows) {
+    const r = el("div", "chrow");
+    r.style.cursor = "default";
+    r.append(el("code", "sha", k), el("span", "subject", what));
+    r.querySelector(".sha").style.flex = "0 0 11ch";
+    body.append(r);
+  }
 }
 
 document.addEventListener("keydown", (e) => {
@@ -905,12 +1159,10 @@ document.addEventListener("keydown", (e) => {
 });
 
 function setSurface(which) {
-  const m = $("main");
-  m.classList.toggle("session", which === "session");
-  m.classList.toggle("changes-on", which === "changes");
-  $("nav-work").classList.toggle("on", which === "work");
-  $("nav-session").classList.toggle("on", which === "session");
-  $("nav-changes").classList.toggle("on", which === "changes");
+  $("main").dataset.surface = which;
+  for (const [id, key] of [["nav-work","work"],["nav-session","session"],["nav-changes","changes"]]) {
+    $(id).setAttribute("aria-current", which === key ? "true" : "false");
+  }
   if (which === "changes") loadChanges(false);
   const p = PANES.get(ACTIVE);
   if (which === "session" && p) { p.fit.fit(); p.term.focus(); }
