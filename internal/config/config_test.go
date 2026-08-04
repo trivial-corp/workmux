@@ -1,0 +1,235 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// write puts a repo-shaped directory on disk. No git needed: config resolution
+// only looks at file names.
+func write(t *testing.T, name string, files map[string]string) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range files {
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func load(t *testing.T, root string) *Config {
+	t.Helper()
+	c, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return c
+}
+
+// The headline claim: a repo needs no config at all.
+func TestBareRepoNeedsNoConfig(t *testing.T) {
+	c := load(t, write(t, "my-project", nil))
+
+	if c.Name != "my-project" {
+		t.Errorf("name = %q, want the directory name", c.Name)
+	}
+	if c.HasStack() {
+		t.Error("no compose file should mean no stack")
+	}
+	if c.Worktrees.Path != filepath.Join(".claude", "worktrees") {
+		t.Errorf("worktrees.path = %q", c.Worktrees.Path)
+	}
+	if len(c.Worktrees.Copy) != 0 {
+		t.Errorf("worktrees.copy = %v, want empty", c.Worktrees.Copy)
+	}
+	// Claude Code is the default preset, so today's behaviour is the no-config
+	// behaviour.
+	want := Agent{
+		Command: "claude", Spawn: "claude --bg {prompt}", Attach: "claude attach {id}",
+		Jobs: "~/.claude/jobs", MCP: "claude mcp", Process: "claude", Name: "claude",
+	}
+	if c.Agent != want {
+		t.Errorf("agent = %+v\nwant %+v", c.Agent, want)
+	}
+}
+
+func TestComposeFileIsEnoughForAStack(t *testing.T) {
+	for _, name := range []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml"} {
+		t.Run(name, func(t *testing.T) {
+			c := load(t, write(t, "shop", map[string]string{name: "services: {}\n"}))
+			if !c.HasStack() {
+				t.Fatal("stack not detected")
+			}
+			if c.Stack.Compose != name {
+				t.Errorf("compose = %q, want %q", c.Stack.Compose, name)
+			}
+			if got := c.SlotName(2); got != "shop2" {
+				t.Errorf("slot 2 = %q, want shop2", got)
+			}
+			wantCmd := "docker compose -p shop1 -f " + name + " up -d --build"
+			if got := c.StackCmd("up", "shop1", "", ""); got != wantCmd {
+				t.Errorf("up = %q\nwant %q", got, wantCmd)
+			}
+			// No url configured means no Open button, not a broken link.
+			if got := c.StackURL("shop1"); got != "" {
+				t.Errorf("url = %q, want empty", got)
+			}
+		})
+	}
+}
+
+// compose.yaml wins over docker-compose.yml when both exist: it's the name the
+// current tooling writes.
+func TestComposeDetectionOrder(t *testing.T) {
+	c := load(t, write(t, "both", map[string]string{
+		"docker-compose.yml": "services: {}\n",
+		"compose.yaml":       "services: {}\n",
+	}))
+	if c.Stack.Compose != "compose.yaml" {
+		t.Errorf("compose = %q, want compose.yaml", c.Stack.Compose)
+	}
+}
+
+func TestStackNullBeatsDetection(t *testing.T) {
+	c := load(t, write(t, "nulled", map[string]string{
+		"compose.yaml": "services: {}\n",
+		"workmux.json": `{"stack": null}`,
+	}))
+	if c.HasStack() {
+		t.Fatal(`"stack": null must win over a compose file on disk`)
+	}
+	// And every stack action has to refuse rather than improvise.
+	for _, action := range []string{"up", "restart", "stop", "logs"} {
+		if got := c.StackCmd(action, "x", "", ""); got != "" {
+			t.Errorf("%s = %q, want empty", action, got)
+		}
+	}
+	if c.Profiles() != "" || c.StackURL("x") != "" {
+		t.Error("no stack should mean no profiles and no url")
+	}
+}
+
+func TestConfiguredStackOverridesEverything(t *testing.T) {
+	c := load(t, write(t, "trip1", map[string]string{
+		"compose.yaml": "services: {}\n",
+		"workmux.json": `{
+			"name": "trip1",
+			"stack": {
+				"slots": "trip{n}",
+				"url": "http://{slot}.localhost",
+				"profiles": "app,tools",
+				"commands": {"up": "STACK={slot} bin/dev up {path}"}
+			}
+		}`,
+	}))
+	if got := c.SlotName(2); got != "trip2" {
+		t.Errorf("slot = %q, want trip2", got)
+	}
+	if got := c.StackURL("trip2"); got != "http://trip2.localhost" {
+		t.Errorf("url = %q", got)
+	}
+	if got := c.StackCmd("up", "trip2", "/w/x", ""); got != "STACK=trip2 bin/dev up /w/x" {
+		t.Errorf("up = %q", got)
+	}
+	// Unspecified commands still fall back, so a partial override isn't a hole.
+	if got := c.StackCmd("stop", "trip2", "", ""); got == "" {
+		t.Error("stop should fall back to the compose default")
+	}
+	if !c.IsSlot("trip7") || c.IsSlot("other1") || c.IsSlot("trip") {
+		t.Error("slot matching is wrong")
+	}
+}
+
+// "agent": null means there is no agent here — and every agent-shaped capability
+// has to disappear rather than fail.
+func TestAgentNull(t *testing.T) {
+	c := load(t, write(t, "noagent", map[string]string{"workmux.json": `{"agent": null}`}))
+	if c.Agent != (Agent{}) {
+		t.Errorf("agent = %+v, want zero", c.Agent)
+	}
+	if c.JobsDir() != "" {
+		t.Errorf("jobs = %q, want empty", c.JobsDir())
+	}
+	if c.SpawnCmd("do a thing") != "" || c.AttachCmd("abc") != "" {
+		t.Error("no agent should mean no spawn and no attach command")
+	}
+}
+
+func TestAnotherAgentCLI(t *testing.T) {
+	c := load(t, write(t, "other", map[string]string{"workmux.json": `{
+		"agent": {"command": "mycoder --resume", "spawn": "mycoder run {prompt}"}
+	}`}))
+	if c.Agent.Command != "mycoder --resume" {
+		t.Errorf("command = %q", c.Agent.Command)
+	}
+	// The process to look for is the executable, not the whole command line.
+	if c.Agent.Process != "mycoder" || c.Agent.Name != "mycoder" {
+		t.Errorf("process/name = %q/%q, want mycoder", c.Agent.Process, c.Agent.Name)
+	}
+	// Claude's defaults must not leak onto a different CLI.
+	if c.Agent.Attach != "" || c.Agent.Jobs != "" || c.Agent.MCP != "" {
+		t.Errorf("claude defaults leaked: %+v", c.Agent)
+	}
+	if got := c.SpawnCmd("ship it"); got != "mycoder run 'ship it'" {
+		t.Errorf("spawn = %q", got)
+	}
+}
+
+// Prompts are arbitrary user text heading for `sh -lc`, so quoting is the
+// boundary that has to hold.
+func TestSpawnQuotesTheProompt(t *testing.T) {
+	c := load(t, write(t, "quoting", nil))
+	got := c.SpawnCmd(`don't; rm -rf /`)
+	want := `claude --bg 'don'\''t; rm -rf /'`
+	if got != want {
+		t.Errorf("spawn = %q\nwant %q", got, want)
+	}
+}
+
+func TestJobsDirExpandsHome(t *testing.T) {
+	c := load(t, write(t, "home", nil))
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	if want := filepath.Join(home, ".claude", "jobs"); c.JobsDir() != want {
+		t.Errorf("jobs = %q, want %q", c.JobsDir(), want)
+	}
+}
+
+func TestWorktreesConfig(t *testing.T) {
+	c := load(t, write(t, "wt", map[string]string{"workmux.json": `{
+		"worktrees": {"path": ".wt", "copy": [".env", "config/*.key"]}
+	}`}))
+	if c.Worktrees.Path != ".wt" {
+		t.Errorf("path = %q", c.Worktrees.Path)
+	}
+	if len(c.Worktrees.Copy) != 2 {
+		t.Errorf("copy = %v", c.Worktrees.Copy)
+	}
+}
+
+// A typo in config is worth stopping for: silently ignoring it looks like the
+// tool ignoring the project.
+func TestBrokenJSONIsAnError(t *testing.T) {
+	if _, err := Load(write(t, "broken", map[string]string{"workmux.json": `{"name": }`})); err == nil {
+		t.Fatal("invalid json should be an error")
+	}
+}
+
+// A missing file is the zero-config case, not a failure.
+func TestDotfileNameAlsoWorks(t *testing.T) {
+	c := load(t, write(t, "dotted", map[string]string{".workmux.json": `{"name": "renamed"}`}))
+	if c.Name != "renamed" {
+		t.Errorf("name = %q, want renamed", c.Name)
+	}
+}

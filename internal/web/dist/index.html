@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>workmux</title>
+<style>
+  :root { color-scheme: dark; --bg:#0e0e13; --panel:#15151c; --ink:#e7e7ee; --dim:#9a9aae;
+          --line:#26262f; --ok:#4ade80; --warn:#fbbf24; --live:#60a5fa; }
+  * { box-sizing: border-box; min-width: 0; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 ui-sans-serif,-apple-system,system-ui,sans-serif; }
+  header { display:flex; gap:10px; align-items:baseline; padding:14px 16px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:15px; font-weight:600; letter-spacing:.02em; }
+  .meta { color:var(--dim); font-size:12px; }
+  main { padding:12px 16px 40px; display:grid; gap:8px; max-width:820px; }
+  .w { background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 12px; }
+  .top { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .br { font-weight:600; overflow-wrap:anywhere; }
+  .tag { font-size:11px; color:var(--dim); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }
+  .tag.live { color:var(--live); border-color:#2b4a72; }
+  .tag.blocked { color:var(--warn); border-color:#5a4416; }
+  .tag.up { color:var(--ok); border-color:#1f5133; }
+  .sub { color:var(--dim); font-size:12px; margin-top:4px; overflow-wrap:anywhere; }
+  .empty { color:var(--dim); }
+</style>
+<header><h1>workmux</h1><span class="meta" id="meta">loading…</span></header>
+<main id="list"></main>
+<script>
+// Minimal on purpose: this proves the API end to end while the full frontend is
+// ported out of the python server into its own build. It is not the final UI.
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c;
+                          if (x != null) n.textContent = x; return n; };
+async function poll() {
+  let d;
+  try { d = await (await fetch("/api/work")).json(); }
+  catch { document.getElementById("meta").textContent = "server unreachable"; return; }
+  const work = d.work || [];
+  document.getElementById("meta").textContent =
+    [d.name, work.length + " worktrees", "base " + d.base,
+     d.stack_enabled ? "stack: " + (d.next_slot || "—") : "no stack",
+     d.agent && d.agent.name ? "agent: " + d.agent.name : "no agent"].join(" · ");
+  const list = document.getElementById("list");
+  list.textContent = "";
+  if (!work.length) list.append(el("p", "empty", "No worktrees yet."));
+  for (const w of work) {
+    const card = el("div", "w"), top = el("div", "top");
+    top.append(el("span", "br", w.branch));
+    if (w.is_default) top.append(el("span", "tag", "base checkout"));
+    if (w.live) top.append(el("span", "tag live", "working"));
+    if (w.tempo === "blocked") top.append(el("span", "tag blocked", "needs input"));
+    if (w.stack) top.append(el("span", "tag up", "app " + w.stack.slot + " " + w.stack.up + "/" + w.stack.total));
+    for (const n of w.prs || []) top.append(el("span", "tag", "#" + n));
+    if (w.behind > 0) top.append(el("span", "tag", "⇣" + w.behind + " " + w.base));
+    if (w.ahead > 0) top.append(el("span", "tag", "⇡" + w.ahead));
+    card.append(top);
+    const bits = [];
+    for (const a of w.agents || []) bits.push((a.name || a.id) + (a.tempo ? " · " + a.tempo : ""));
+    for (const s of w.sessions || []) bits.push("session: " + (s.title || s.kind));
+    if (bits.length) card.append(el("div", "sub", bits.join("  —  ")));
+    list.append(card);
+  }
+}
+poll(); setInterval(poll, 4000);
+</script>

@@ -1,0 +1,306 @@
+// Command workmux serves one repository's dashboard.
+//
+// Flags first, environment second, defaults last — and the defaults are chosen so
+// that running it with no arguments in any git repo does something useful.
+package main
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/trivial-corp/workmux/internal/agents"
+	"github.com/trivial-corp/workmux/internal/config"
+	"github.com/trivial-corp/workmux/internal/gitx"
+	"github.com/trivial-corp/workmux/internal/web"
+	"github.com/trivial-corp/workmux/internal/work"
+)
+
+// version is stamped at build time (-ldflags "-X main.version=…"); dev otherwise.
+var version = "dev"
+
+const usage = `workmux — run several coding agents at once, one git worktree each, from a browser.
+
+usage: workmux [options]
+
+  -p, --port N       port to listen on (default 4315)
+      --host ADDR    interface to bind (default 127.0.0.1). 0.0.0.0 reaches it
+                     from a phone; off-loopback requests then need a token
+      --token TOK    pin the token instead of minting one (empty to disable it,
+                     when something in front already authenticates)
+      --root DIR     repository to serve (default: the current directory)
+      --no-terminal  dashboard only — don't serve shells
+      --open         open a browser once it's listening
+  -h, --help         this
+  -V, --version      print the version
+
+workmux.json at the repo root is optional — each key falls back to what the repo
+already says. See https://github.com/trivial-corp/workmux for the schema.
+`
+
+type options struct {
+	port     int
+	host     string
+	token    string
+	tokenSet bool
+	root     string
+	noTerm   bool
+	open     bool
+}
+
+func main() {
+	opts, err := parseArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "workmux: %v (try --help)\n", err)
+		os.Exit(2)
+	}
+
+	root, err := filepath.Abs(opts.root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "workmux: %v\n", err)
+		os.Exit(1)
+	}
+	// Through symlinks first. git reports resolved paths, and agent ownership is
+	// decided by path prefix — so with /var vs /private/var (every macOS temp dir,
+	// and any symlinked checkout) nothing would ever match its own worktree.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	// Resolve to the primary checkout unless told otherwise, so running it from a
+	// subdirectory — or from inside one of the worktrees it manages — works.
+	if !flagGiven("root") && os.Getenv("WORKMUX_ROOT") == "" {
+		root = gitx.PrimaryRoot(root)
+	}
+	if !gitx.IsRepo(root) {
+		fmt.Fprintf(os.Stderr, "workmux: %s is not a git repository.\n"+
+			"The unit of work here is a worktree, so it needs one — run it inside "+
+			"your project, or pass --root DIR.\n", root)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "workmux: workmux.json is not valid json: %v\n", err)
+		os.Exit(1)
+	}
+
+	// git is required; docker only matters when there's a stack, and demanding it
+	// otherwise turned "this project has no containers" into "won't start".
+	needed := []string{"git"}
+	if cfg.HasStack() {
+		needed = append(needed, "docker")
+	}
+	for _, tool := range needed {
+		if _, err := exec.LookPath(tool); err != nil {
+			fmt.Fprintf(os.Stderr, "workmux: '%s' is required.\n", tool)
+			os.Exit(1)
+		}
+	}
+
+	token := opts.token
+	if !opts.tokenSet {
+		token = os.Getenv("WORKMUX_TOKEN")
+		if _, set := os.LookupEnv("WORKMUX_TOKEN"); !set {
+			if isLoopback(opts.host) {
+				token = ""
+			} else {
+				token = mintToken()
+			}
+		}
+	}
+
+	reader := &agents.Reader{JobsDir: cfg.JobsDir(), Process: cfg.Agent.Process}
+	builder := &work.Builder{Cfg: cfg, Agents: reader, Terminal: !opts.noTerm}
+	srv := &web.Server{Cfg: cfg, Builder: builder, Token: token, Origins: origins(opts.host, opts.port)}
+
+	addr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
+	shown := opts.host
+	if opts.host == "0.0.0.0" || opts.host == "::" {
+		shown = "127.0.0.1"
+	}
+	where := fmt.Sprintf("http://%s:%d", shown, opts.port)
+
+	fmt.Fprintf(os.Stderr, "\n  \033[1mworkmux\033[0m \033[2m%s\033[0m — %s\n  \033[36m%s\033[0m\n",
+		version, cfg.Name, where)
+	if token != "" {
+		lan := lanAddress()
+		if lan == "" {
+			lan = shown
+		}
+		fmt.Fprintf(os.Stderr, "  \033[36mhttp://%s:%d/?t=%s\033[0m  \033[2m← open this on your phone\033[0m\n",
+			lan, opts.port, token)
+		fmt.Fprint(os.Stderr, "  \033[2mtoken auth on (loopback exempt). Terminals are a shell: put TLS in\n"+
+			"  front before exposing this beyond a trusted network.\033[0m\n")
+	} else if isLoopback(opts.host) {
+		fmt.Fprint(os.Stderr, "  \033[2mloopback only — no token needed\033[0m\n")
+	}
+	if !cfg.HasStack() {
+		fmt.Fprint(os.Stderr, "  \033[2mno stack configured — worktrees, agents and sessions only\033[0m\n")
+	}
+	fmt.Fprintf(os.Stderr, "  root: %s\n  Ctrl-C to stop.\n\n", root)
+
+	if opts.open {
+		openBrowser(where + tokenQuery(token))
+	}
+	if err := srv.Listen(addr); err != nil {
+		fmt.Fprintf(os.Stderr, "workmux: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// given tracks which flags were passed, so environment fallbacks only apply when
+// the flag wasn't.
+var given = map[string]bool{}
+
+func flagGiven(name string) bool { return given[name] }
+
+// parseArgs accepts the long and short forms people actually type, including
+// --port=8080. flag.Parse is avoided because it can't do "-p" and "--port" both.
+func parseArgs(argv []string) (options, error) {
+	o := options{port: 4315, host: "127.0.0.1", root: "."}
+	if v := os.Getenv("WORKMUX_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			o.port = n
+		}
+	}
+	if v := os.Getenv("WORKMUX_HOST"); v != "" {
+		o.host = v
+	}
+	if v := os.Getenv("WORKMUX_ROOT"); v != "" {
+		o.root = v
+	}
+	if os.Getenv("WORKMUX_TERMINAL") == "0" {
+		o.noTerm = true
+	}
+
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		name, inline, hasInline := strings.Cut(a, "=")
+		value := func() (string, error) {
+			if hasInline {
+				return inline, nil
+			}
+			if i+1 >= len(argv) {
+				return "", fmt.Errorf("%s needs a value", name)
+			}
+			i++
+			return argv[i], nil
+		}
+		switch name {
+		case "-h", "--help":
+			fmt.Print(usage)
+			os.Exit(0)
+		case "-V", "--version":
+			fmt.Printf("workmux %s\n", version)
+			os.Exit(0)
+		case "--no-terminal":
+			o.noTerm = true
+		case "--open":
+			o.open = true
+		case "-p", "--port":
+			v, err := value()
+			if err != nil {
+				return o, err
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 || n > 65535 {
+				return o, fmt.Errorf("--port wants a number")
+			}
+			o.port, given["port"] = n, true
+		case "--host":
+			v, err := value()
+			if err != nil {
+				return o, err
+			}
+			o.host, given["host"] = v, true
+		case "--token":
+			v, err := value()
+			if err != nil {
+				return o, err
+			}
+			o.token, o.tokenSet, given["token"] = v, true, true
+		case "--root":
+			v, err := value()
+			if err != nil {
+				return o, err
+			}
+			o.root, given["root"] = v, true
+		default:
+			return o, fmt.Errorf("unknown option %s", name)
+		}
+	}
+	return o, nil
+}
+
+func isLoopback(host string) bool {
+	switch host {
+	case "127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1":
+		return true
+	}
+	return false
+}
+
+func mintToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// Without randomness a token would be a false promise; better to refuse.
+		fmt.Fprintln(os.Stderr, "workmux: no source of randomness for a token")
+		os.Exit(1)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func tokenQuery(token string) string {
+	if token == "" {
+		return ""
+	}
+	return "/?t=" + token
+}
+
+// origins is the allowlist for WebSocket upgrades: the addresses this instance is
+// actually reachable at, and nothing else.
+func origins(host string, port int) []string {
+	hosts := []string{"127.0.0.1", "localhost", "[::1]"}
+	if !isLoopback(host) {
+		hosts = append(hosts, host)
+		if lan := lanAddress(); lan != "" {
+			hosts = append(hosts, lan)
+		}
+	}
+	var out []string
+	for _, h := range hosts {
+		out = append(out, fmt.Sprintf("http://%s:%d", h, port), fmt.Sprintf("https://%s:%d", h, port))
+	}
+	return out
+}
+
+// lanAddress is this machine's address on the local network, for the phone URL.
+func lanAddress() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, a := range addrs {
+		if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if v4 := ipnet.IP.To4(); v4 != nil {
+				return v4.String()
+			}
+		}
+	}
+	return ""
+}
+
+func openBrowser(url string) {
+	for _, opener := range []string{"open", "xdg-open"} {
+		if path, err := exec.LookPath(opener); err == nil {
+			_ = exec.Command(path, url).Start()
+			return
+		}
+	}
+}
