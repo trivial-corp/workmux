@@ -47,7 +47,8 @@ header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12
 /* ── buttons: one shape, three weights ───────────────────────────────────── */
 .b { background:transparent; border:1px solid var(--line); border-radius:var(--r);
      padding:4px 9px; font-size:12px; cursor:pointer; white-space:nowrap;
-     color:var(--t2); transition:border-color .12s, color .12s, background .12s; }
+     color:var(--t2); transition:border-color .12s, color .12s, background .12s;
+     flex:0 0 auto; }
 .b:hover { border-color:#31404f; color:var(--t1); background:var(--elev); }
 .b:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .b.primary { border-color:#37436b; color:#c9d4ff; background:#1a1f33; }
@@ -57,16 +58,20 @@ header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12
 .b.dead { color:var(--t3); text-decoration:line-through; }
 .b.icon { font-family:var(--mono); }
 .b[disabled] { opacity:.5; cursor:default; }
-.group { display:flex; gap:6px; padding-right:8px; margin-right:2px;
+.group { display:flex; gap:6px; padding-right:8px; margin-right:2px; flex:0 0 auto;
          border-right:1px solid var(--line-soft); }
 .group:last-child { border-right:0; padding-right:0; }
 
 /* ── layout ──────────────────────────────────────────────────────────────── */
 main { flex:1 1 auto; display:grid; min-height:0;
-       grid-template-columns:minmax(0,304px) minmax(0,1.1fr) minmax(0,0.95fr); }
+       grid-template-columns:minmax(0,304px) minmax(0,1fr); }
+/* The session and the diff share one column, switched by the tabs in the toolbar. */
+main .changes { display:none; }
+main[data-surface="changes"] .changes { display:flex; }
+main[data-surface="changes"] .pane { display:none; }
 .list, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
 .list { overflow-y:auto; border-right:1px solid var(--line); background:var(--panel); }
-.changes { border-left:1px solid var(--line); background:var(--panel); }
+.changes { background:var(--panel); }
 
 /* ── bands: the ordering, made visible ───────────────────────────────────── */
 .band { border-bottom:1px solid var(--line-soft); padding:0 0 6px; }
@@ -118,6 +123,14 @@ main { flex:1 1 auto; display:grid; min-height:0;
 .bar::-webkit-scrollbar { display:none; }
 .bar .who { font-family:var(--mono); font-size:11px; color:var(--t3); white-space:nowrap;
             overflow:hidden; text-overflow:ellipsis; }
+.seg { display:flex; flex:0 0 auto; border:1px solid var(--line); border-radius:var(--r);
+       overflow:hidden; }
+.seg button { background:transparent; border:0; padding:4px 11px; font-size:12px;
+              color:var(--t3); cursor:pointer; white-space:nowrap; }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button[aria-current="true"] { background:var(--elev-2); color:var(--t1); }
+.seg .n { font-family:var(--mono); font-size:10.5px; opacity:.7; margin-left:5px; }
+@media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
 .term { flex:1 1 auto; min-height:0; padding:8px 4px 4px 10px; background:var(--ink); }
 .term .xterm { height:100%; }
 .hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
@@ -211,12 +224,7 @@ main { flex:1 1 auto; display:grid; min-height:0;
 
 /* ── phone / tablet: exactly one surface, one rule ───────────────────────── */
 nav { display:none; }
-@media (max-width:1280px) {
-  main { grid-template-columns:minmax(0,280px) minmax(0,1fr); }
-  main .changes { display:none; }
-  main[data-surface="changes"] .changes { display:flex; }
-  main[data-surface="changes"] .pane { display:none; }
-}
+@media (max-width:1280px) { main { grid-template-columns:minmax(0,272px) minmax(0,1fr); } }
 @media (max-width:900px) {
   main { grid-template-columns:1fr; }
   /* One rule decides what is visible, so two of them can't disagree — which is how
@@ -338,7 +346,8 @@ async function poll() {
   if (!SEL || !WORK.some(w => w.path === SEL)) SEL = (WORK[0] || {}).path || null;
   renderWork();
   await refreshSessions();
-  loadChanges(!CH || CH.for !== SEL);
+  await loadChanges(!CH || CH.for !== SEL);
+  if ($("main").dataset.surface === "changes") renderChanges(); else renderBar();
 }
 
 // Bands make the server's ordering visible. It already sorts by what wants you, but
@@ -414,7 +423,7 @@ function strip(w, tone) {
   row.onclick = () => {
     SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
     renderWork(); renderBar(); loadChanges(true);
-    if (window.matchMedia("(max-width:900px)").matches) setSurface("session");
+    setSurface("session");
   };
   return row;
 }
@@ -431,10 +440,27 @@ async function refreshSessions() {
   renderBar();
 }
 
+// One switch, rendered into whichever toolbar is showing, so it never moves.
+function tabs(active) {
+  const seg = el("div", "seg");
+  const add = (key, label, count) => {
+    const b = el("button", null, label);
+    b.setAttribute("aria-current", active === key ? "true" : "false");
+    if (count != null) b.append(el("span", "n", String(count)));
+    b.onclick = () => setSurface(key);
+    seg.append(b);
+  };
+  add("session", "Session", (SESSIONS.filter(s => s.cwd === SEL).length) || null);
+  const n = CH && CH.for === SEL ? (CH.files || []).length : null;
+  add("changes", "Changes", n || null);
+  return seg;
+}
+
 function renderBar() {
   const bar = $("bar");
   bar.textContent = "";
   if (!STATE) return;
+  bar.append(tabs("session"));
   if (STATE.terminal === false) {
     bar.append(el("span", "who", "Terminals are off — started with --no-terminal."));
     return;
@@ -805,6 +831,7 @@ function renderChanges() {
   const w = selected();
   if (!w) return;
   if (CHFILE || CHREV) return;              // paintDiff owns the pane
+  bar.append(tabs("changes"));
   const refresh = el("button", "b icon", "↻");
   refresh.title = "Re-read this worktree";
   refresh.onclick = () => loadChanges(true);
@@ -878,6 +905,7 @@ async function showCommitDiff(c) {
 function paintDiff(title, diff, error) {
   const bar = $("chbar"), body = $("chbody");
   bar.textContent = ""; body.textContent = "";
+  bar.append(tabs("changes"));
   const back = el("button", "b", "‹ files");
   back.onclick = () => { CHFILE = null; CHREV = null; renderChanges(); };
   bar.append(back);
