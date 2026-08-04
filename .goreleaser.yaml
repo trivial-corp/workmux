@@ -38,9 +38,14 @@ checksum:
 # installs via scripts/install.sh, the container image, or `go install`.
 homebrew_casks:
   - name: workmux
+    # The cask is optional: pushing it needs a token that can write *another* repo,
+    # which the default GITHUB_TOKEN cannot. Without one, skip it and still ship the
+    # binaries — a release that fails over an optional target has published nothing.
+    skip_upload: '{{ if eq .Env.HOMEBREW_TAP_TOKEN "" }}true{{ else }}false{{ end }}'
     repository:
       owner: trivial-corp
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/trivial-corp/workmux
     description: Run several coding agents at once, one git worktree each, from a browser
     license: MIT

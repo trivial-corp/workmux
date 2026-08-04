@@ -24,8 +24,10 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A tap in another repo needs a token that can write to it. Without this
-          # secret the release still publishes; only the brew formula is skipped.
+          # A tap in another repo needs a token that can write to it — the default
+          # GITHUB_TOKEN is scoped to this repository. An unset secret arrives as an
+          # empty string, which the config reads as "skip the cask" rather than
+          # failing the release after the binaries are already up.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   npm:
