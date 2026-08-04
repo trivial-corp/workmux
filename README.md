@@ -246,7 +246,9 @@ comes from the same JSON:
 | `POST /api/session/new` | `{kind, cwd, cols, rows}` — shell / agent / attach / logs / git, or `resume` for "this worktree's agent, whatever that is" |
 | `POST /api/session/kill` | `{id}` |
 | `WS /api/session/socket/{id}` | binary frames are raw PTY bytes both ways; text frames are JSON control (`{"t":"size"}`, `{"t":"exit"}`) |
-| `POST /api/upload` | a pasted image; returns the path to type into a session |
+| `POST /api/upload` | a pasted image; puts it on the host clipboard and returns the path |
+| `GET /api/changes` | `?path=&base=` — file status with line counts, plus the commits this branch has that its base doesn't |
+| `GET /api/diff` | `?path=&file=` for a file, `?path=&rev=` for a commit |
 
 Two rules the session API keeps, both server-side, because between them they're the
 difference between a dev tool and a remote shell for anyone who can reach the port:
@@ -260,7 +262,7 @@ not cover WebSockets).
 - [x] Worktrees, agents, PRs, stacks, ordering — `GET /api/work`
 - [x] Token auth, origin allowlist, embedded UI
 - [x] Terminal sessions: PTY + WebSocket, replay on reattach, size arbitration
-- [ ] Changes: status, per-file diffs, commits this branch has that its base doesn't
+- [x] Changes: status, per-file diffs, commits this branch has that its base doesn't
 - [ ] Actions: new work, start/stop a stack, merge the base in, check a PR out
 - [ ] MCP panel: reachability, scope, authenticate
 - [ ] The frontend as a proper TS build, embedded — shared with a mobile app

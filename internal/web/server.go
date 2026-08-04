@@ -92,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/config", s.guard(s.handleConfig))
 	mux.HandleFunc("/api/health", s.handleHealth) // unguarded: for a proxy probe
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
+	mux.HandleFunc("/api/changes", s.guard(s.handleChanges))
+	mux.HandleFunc("/api/diff", s.guard(s.handleDiff))
 	if s.Sessions != nil {
 		mux.HandleFunc("/api/session/list", s.guard(s.handleSessionList))
 		mux.HandleFunc("/api/session/new", s.guard(s.handleSessionNew))
