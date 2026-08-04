@@ -141,7 +141,8 @@ main[data-surface="changes"] .pane { display:none; }
 .tab .x:hover { color:var(--danger); background:#1e1315; }
 .tab.dead .nm { text-decoration:line-through; opacity:.6; }
 @media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
-.term { flex:1 1 auto; min-height:0; padding:8px 4px 4px 10px; background:var(--ink); }
+.term { flex:1 1 auto; min-height:0; padding:8px 4px 4px 10px; background:var(--ink);
+        overflow:hidden; }
 .term .xterm { height:100%; }
 .hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
 .hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
@@ -151,8 +152,13 @@ main[data-surface="changes"] .pane { display:none; }
          font-family:var(--mono); font-size:11.5px; align-items:baseline; }
 .facts dt { color:var(--t3); text-align:right; }
 .facts dd { margin:0; color:var(--t2); overflow-wrap:anywhere; }
-.keys { display:none; gap:5px; padding:6px 8px; border-top:1px solid var(--line);
-        flex:0 0 auto; overflow-x:auto; scrollbar-width:none; }
+.keys { display:none; gap:5px; padding:7px 10px; border-top:1px solid var(--line);
+        flex:0 0 auto; overflow-x:auto; scrollbar-width:none;
+        /* Opaque and above the terminal: it was transparent, so the last rows of
+           output were visible through the keys and looked like overlap. */
+        background:var(--panel); position:relative; z-index:2; }
+.keys::-webkit-scrollbar { display:none; }
+.keys .b { min-width:3.2em; text-align:center; font-family:var(--mono); padding:6px 8px; }
 
 /* ── changes ─────────────────────────────────────────────────────────────── */
 .chbody { flex:1 1 auto; overflow-y:auto; padding:0 0 12px; }
@@ -1231,11 +1237,30 @@ function setSurface(which) {
   if (which === "session" && p) { p.fit.fit(); p.term.focus(); }
 }
 
-// Refit on rotate, on window changes, and when a phone keyboard appears — that
-// changes the visible height without firing a window resize on iOS.
-const refit = () => { const p = PANES.get(ACTIVE); if (p) p.fit.fit(); };
+// The PTY has to match the box, and the box changes for reasons a resize event
+// doesn't cover: the key bar appearing, a phone keyboard opening, switching surfaces,
+// fonts loading. Watching the element itself catches all of them, and it's the one
+// place that calls fit.
+let refitTimer = null;
+function refit() {
+  clearTimeout(refitTimer);
+  refitTimer = setTimeout(() => {
+    const p = PANES.get(ACTIVE);
+    if (!p) return;
+    const box = $("term").getBoundingClientRect();
+    if (box.height < 40 || box.width < 80) return;   // hidden or mid-layout
+    try { p.fit.fit(); } catch {}
+  }, 60);
+}
+if (window.ResizeObserver) new ResizeObserver(refit).observe($("term"));
 window.addEventListener("resize", refit);
-if (window.visualViewport) window.visualViewport.addEventListener("resize", refit);
+window.addEventListener("orientationchange", refit);
+if (window.visualViewport) {
+  // iOS changes the visible height when the keyboard opens without firing resize.
+  window.visualViewport.addEventListener("resize", refit);
+  window.visualViewport.addEventListener("scroll", refit);
+}
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
 poll();
 setInterval(poll, 4000);
