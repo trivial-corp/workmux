@@ -98,8 +98,20 @@ work out. Everything else is derived from the repo, so most projects get:
   Nothing to configure. Every default fits this repo — just run workmux.
 ```
 
-`--dry-run` prints instead of writing; `--force` replaces an existing file. Agents
-have their own instructions for this in [AGENTS.md](AGENTS.md).
+At a terminal it asks about the few things it can't derive — whether to carry those
+files over, where the app opens, whether this project uses an agent at all — and
+shows you the file before writing it. Prompts, not a full-screen TUI: it's a handful
+of questions once, the answer is usually "nothing to configure", and the real
+interface is a browser.
+
+```
+workmux init --dry-run    # look without writing
+workmux init --yes        # take every default, ask nothing
+workmux init --force      # replace an existing workmux.json
+```
+
+Piped, scripted or run by an agent it asks nothing and takes the defaults, so it's
+safe in automation. Agents have their own instructions in [AGENTS.md](AGENTS.md).
 
 ## Configuration
 
@@ -270,6 +282,7 @@ things make it a debug loop rather than a guessing game:
   `--verbose` alone gives you that against the embedded frontend.
 
 ```
+make test-race                # the concurrent read path, under the detector
 make watch ROOT=~/code/app    # restart on every .go change (watchexec or entr)
 make debug ROOT=~/code/app    # under delve, with breakpoints
 make install                  # ~/go/bin/workmux — what `bin/dev serve` finds
@@ -284,6 +297,17 @@ running the code.
 Tests use real git repositories in temp directories rather than mocks: every claim
 this tool makes about worktrees, branches and commit counts comes from git's own
 output, so a fake would only test the fake.
+
+## CI
+
+`ci.yml` on every push and PR: `gofmt` + `go vet`, tests, tests under the race
+detector, and a build — on **both macOS and Linux**, because this shells out to
+platform tools (`pgrep`, `lsof`) and that's where the difference bites. Then the
+four cross-compiled binaries, `goreleaser check`, and a Docker build that has to
+start and answer for itself.
+
+`release.yml` on a `v*` tag: four static binaries with checksums, a Homebrew cask,
+and a multi-arch image to ghcr.
 
 ## License
 

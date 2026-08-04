@@ -32,7 +32,7 @@ var version = "dev"
 const usage = `workmux — run several coding agents at once, one git worktree each, from a browser.
 
 usage: workmux [options]
-       workmux init [--dry-run] [--force]    look at this repo and set it up
+       workmux init [--dry-run] [--yes] [--force]   look at this repo and set it up
 
   -p, --port N       port to listen on (default 4315)
       --host ADDR    interface to bind (default 127.0.0.1). 0.0.0.0 reaches it
@@ -205,10 +205,17 @@ func main() {
 
 func runInit(argv []string) {
 	o := initcmd.Options{Root: "."}
+	// Interactive only when there's a person there. A pipe, a CI job or an agent
+	// gets the same run without questions, and takes the defaults.
+	if st, err := os.Stdout.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
+		o.In = os.Stdin
+	}
 	for _, a := range argv {
 		switch a {
 		case "--dry-run", "-n":
 			o.DryRun = true
+		case "--yes", "-y":
+			o.Yes = true
 		case "--force", "-f":
 			o.Force = true
 		case "-h", "--help":

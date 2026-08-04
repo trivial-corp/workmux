@@ -22,6 +22,9 @@ jobs:
           cache: true
       - run: make lint
       - run: make test
+      # The dashboard reads worktrees, stacks and agent state concurrently, and a
+      # data race there would show up as a wrong number rather than a crash.
+      - run: make test-race
       - run: make build
 
   cross-build:
@@ -35,3 +38,33 @@ jobs:
       # A release ships four binaries; a build break on any of them is a release
       # break, so find it here rather than at tag time.
       - run: make dist
+
+  release-config:
+    # A broken .goreleaser.yaml only fails at tag time otherwise — the one moment
+    # when failing is most annoying. It already caught `checksums` vs `checksum`.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+
+  image:
+    # deploy/compose.yaml points at a published image, so the Dockerfile has to
+    # keep building. Not pushed here — only on a tag.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: workmux:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # It must at least start and answer for itself.
+      - run: |
+          docker run --rm workmux:ci --version
+          docker run --rm workmux:ci --root /tmp 2>&1 | grep -q "not a git repository"

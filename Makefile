@@ -2,13 +2,18 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test lint run dev watch debug install tidy dist clean
+.PHONY: build test test-race lint run dev watch debug install tidy dist clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o workmux ./cmd/workmux
 
 test:
 	go test ./...
+
+# The dashboard reads git, docker and agent state concurrently; a race there
+# surfaces as a wrong number, not a crash, so it needs the detector to find it.
+test-race:
+	go test -race ./...
 
 # gofmt -l lists files that need formatting; any output is a failure.
 lint:

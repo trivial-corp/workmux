@@ -9,9 +9,11 @@
 package initcmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +31,98 @@ type Options struct {
 	Root   string
 	DryRun bool // print the file instead of writing it
 	Force  bool // overwrite an existing workmux.json
+	// In is where answers come from. Nil, or a stdout that isn't a terminal, runs
+	// it non-interactively — which is what a script or an agent gets.
+	In io.Reader
+	// Yes takes the default answer to everything.
+	Yes bool
+}
+
+// ask prints a question and returns the answer, or def when there's nobody to ask.
+// Deliberately prompts rather than taking over the screen: this is a handful of
+// questions once, and a full-screen TUI for it would be a dependency and a
+// surprise — the actual interface is a browser.
+type prompter struct {
+	out io.Writer
+	in  *bufio.Reader
+}
+
+func newPrompter(out io.Writer, o Options) *prompter {
+	if o.Yes || o.DryRun || o.In == nil {
+		return &prompter{out: out}
+	}
+	return &prompter{out: out, in: bufio.NewReader(o.In)}
+}
+
+func (p *prompter) interactive() bool { return p.in != nil }
+
+// yesNo asks a yes/no question. def is the answer for a bare Enter.
+func (p *prompter) yesNo(q string, def bool) bool {
+	if !p.interactive() {
+		return def
+	}
+	hint := "[Y/n]"
+	if !def {
+		hint = "[y/N]"
+	}
+	fmt.Fprintf(p.out, "  \033[1m?\033[0m %s \033[2m%s\033[0m ", q, hint)
+	line, err := p.in.ReadString('\n')
+	if err != nil && line == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	case "n", "no":
+		return false
+	default:
+		return def
+	}
+}
+
+// text asks for a value; empty means "leave it out". valid rejects answers that
+// would be worse than nothing — an unusable value recorded in config is harder to
+// notice than a missing one, and this prompt is right next to a stray "y" from the
+// question before it.
+func (p *prompter) text(q, placeholder string, valid func(string) string) string {
+	if !p.interactive() {
+		return ""
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		fmt.Fprintf(p.out, "  \033[1m?\033[0m %s \033[2m%s\033[0m ", q, placeholder)
+		line, err := p.in.ReadString('\n')
+		answer := strings.TrimSpace(line)
+		if answer == "" {
+			return "" // deliberately skipped, or nothing left to read
+		}
+		if valid == nil {
+			return answer
+		}
+		if complaint := valid(answer); complaint != "" {
+			fmt.Fprintf(p.out, "    \033[33m%s\033[0m\n", complaint)
+			if err != nil {
+				return "" // no more input to correct it with
+			}
+			continue
+		}
+		return answer
+	}
+	fmt.Fprintf(p.out, "    \033[2mskipping — add stack.url to workmux.json later\033[0m\n")
+	return ""
+}
+
+// validURL is the check for "where does the app open". Only absolute http(s) URLs:
+// the value becomes a link in the dashboard, so a hostname or a stray keystroke
+// would render a button that goes nowhere.
+func validURL(s string) string {
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		return "needs to start with http:// or https://"
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return "that isn't a URL I can link to"
+	}
+	return ""
 }
 
 // candidates are files a fresh worktree usually can't work without. Only ones
@@ -87,14 +181,38 @@ func Run(out io.Writer, o Options) error {
 		fmt.Fprintf(out, "  %-12s %s\n", "carry over", strings.Join(copies, ", "))
 	}
 
-	// Config is only worth writing for what can't be inferred at runtime.
-	if len(copies) == 0 {
-		fmt.Fprintf(out, "\n  \033[32mNothing to configure.\033[0m Every default fits this repo — just run \033[1mworkmux\033[0m.\n\n")
-		return nil
+	p := newPrompter(out, o)
+	if p.interactive() {
+		fmt.Fprintln(out)
 	}
 
-	doc := map[string]any{
-		"worktrees": map[string]any{"copy": copies},
+	doc := map[string]any{}
+
+	// Only ever ask about things that can't be derived. Everything else is already
+	// correct, and a question about it would just be a chance to get it wrong.
+	if len(copies) > 0 {
+		if p.yesNo("Copy these into every new worktree?", true) {
+			doc["worktrees"] = map[string]any{"copy": copies}
+		}
+	}
+	if cfg.HasStack() && cfg.Stack.URL == "" {
+		// Never guessed: a wrong link is worse than no button.
+		if u := p.text("Where does the app open? (blank to skip)",
+			"e.g. http://localhost:8080", validURL); u != "" {
+			doc["stack"] = map[string]any{"url": u}
+		}
+	}
+	if cfg.Agent.Command != "" && !onPath(cfg.Agent.Command) {
+		if p.yesNo(fmt.Sprintf("%s isn't installed. Record that this project has no agent?",
+			strings.Fields(cfg.Agent.Command)[0]), false) {
+			doc["agent"] = nil
+		}
+	}
+
+	// Config is only worth writing for what can't be inferred at runtime.
+	if len(doc) == 0 {
+		fmt.Fprintf(out, "\n  \033[32mNothing to configure.\033[0m Every default fits this repo — just run \033[1mworkmux\033[0m.\n\n")
+		return nil
 	}
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -106,13 +224,46 @@ func Run(out io.Writer, o Options) error {
 		fmt.Fprintf(out, "\n  \033[2mworkmux.json (not written — this is --dry-run)\033[0m\n\n%s\n", body)
 		return nil
 	}
+	if p.interactive() {
+		fmt.Fprintf(out, "\n%s\n", body)
+		if !p.yesNo("Write workmux.json?", true) {
+			fmt.Fprintf(out, "\n  nothing written.\n\n")
+			return nil
+		}
+	}
 	path := filepath.Join(root, "workmux.json")
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "\n  wrote \033[1mworkmux.json\033[0m — the gitignored files each new worktree needs.\n"+
-		"  Everything else is derived from the repo. Run \033[1mworkmux\033[0m.\n\n")
+	fmt.Fprintf(out, "\n  wrote \033[1mworkmux.json\033[0m with %s.\n"+
+		"  Everything else is derived from the repo. Run \033[1mworkmux\033[0m.\n\n", strings.Join(wrote(doc), " and "))
 	return nil
+}
+
+// wrote names what ended up in the file, so the closing line says something true
+// rather than a fixed sentence.
+func wrote(doc map[string]any) []string {
+	var out []string
+	if _, ok := doc["worktrees"]; ok {
+		out = append(out, "the files each new worktree needs")
+	}
+	if _, ok := doc["stack"]; ok {
+		out = append(out, "where the app opens")
+	}
+	if v, ok := doc["agent"]; ok && v == nil {
+		out = append(out, "no agent for this project")
+	}
+	sort.Strings(out)
+	return out
+}
+
+func onPath(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	_, err := exec.LookPath(fields[0])
+	return err == nil
 }
 
 // worktreeSummary describes where new work will go and what's already there.
