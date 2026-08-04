@@ -69,7 +69,11 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"path": path, "bytes": len(body)})
+	// If this machine shares your clipboard, the agent can read the image itself and
+	// nothing needs typing. Otherwise the caller falls back to pasting the path.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path": path, "bytes": len(body), "clipboard": copyImageToClipboard(path),
+	})
 }
 
 // uploadDir is a per-user directory outside any repository — a pasted screenshot is
