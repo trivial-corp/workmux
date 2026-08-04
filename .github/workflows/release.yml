@@ -34,6 +34,11 @@ jobs:
     # produces the packages either way and only pushes them when you've decided to.
     needs: release
     runs-on: ubuntu-latest
+    # The secrets context is not available in a step's `if`, only in `with`, `env` and
+    # `run` — using it there fails the whole workflow before any job starts, with no
+    # logs to explain why. Lift it to an env var, which `if` can read.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -47,7 +52,7 @@ jobs:
       - run: make dist VERSION=${{ github.ref_name }}
       - run: ./scripts/npm-build.sh ${{ github.ref_name }}
       - name: Publish
-        if: ${{ secrets.NPM_TOKEN != '' }}
+        if: env.NPM_TOKEN != ''
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
@@ -56,7 +61,7 @@ jobs:
           for d in npm/build/workmux-*/; do (cd "$d" && npm publish --access public); done
           (cd npm/build/workmux && npm publish --access public)
       - name: Explain the skip
-        if: ${{ secrets.NPM_TOKEN == '' }}
+        if: env.NPM_TOKEN == ''
         run: |
           echo "NPM_TOKEN is not set, so nothing was published."
           echo "The packages were built and verified; add the secret to publish on the next tag."
