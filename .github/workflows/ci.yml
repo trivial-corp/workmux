@@ -20,6 +20,9 @@ jobs:
         with:
           go-version: '1.23'
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
       - run: make lint
       - run: make test
       # The dashboard reads worktrees, stacks and agent state concurrently, and a

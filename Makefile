@@ -19,6 +19,9 @@ test-race:
 lint:
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt:"; echo "$$out"; exit 1; fi
 	go vet ./...
+	@# The embedded frontend is JS that `go build` never parses.
+	@if command -v node >/dev/null; then node scripts/check-frontend.js; \
+	 else echo "  (node absent — skipping the frontend syntax check)"; fi
 
 # Run straight from source against any project — no build, no install.
 #   make dev ROOT=~/code/my-drupal-site

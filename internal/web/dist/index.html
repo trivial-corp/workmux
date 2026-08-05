@@ -276,7 +276,11 @@ nav { display:none; }
 body.full header, body.full .list, body.full .changes, body.full nav { display:none; }
 body.full main { grid-template-columns:1fr; }
 body.full main .pane { display:flex; }
-.caret { margin-left:6px; opacity:.55; font-size:10px; }
+/* Its own target, with its own edge — it opens a menu while the label beside it
+   switches surface, and nobody can guess that from 10px of chevron. */
+.caret { margin-left:7px; padding:2px 2px 2px 7px; font-size:10px; opacity:.6;
+         border-left:1px solid var(--line); border-radius:3px; }
+.caret:hover { opacity:1; color:var(--accent); background:var(--elev-2); }
 /* A count is data, not an alarm: the same weight as every other number in the row. */
 .b .badge { margin-left:6px; font-family:var(--mono); font-size:10.5px; color:var(--t3); }
 /* Named popover, not menu: ".b.menu" on the trigger button was picking up these
@@ -613,7 +617,15 @@ function tabs(active) {
   const caret = el("span", "caret", "▾");
   caret.onclick = (e) => { e.stopPropagation(); gitMenu(git, w); };
   git.append(caret);
-  git.onclick = () => setSurface("changes");
+  git.onclick = () => {
+    // Already looking at a diff? The tab is how you get back to the list.
+    if ($("main").dataset.surface === "changes" && (CHFILE || CHREV)) {
+      CHFILE = null; CHREV = null;
+      renderChanges();
+      return;
+    }
+    setSurface("changes");
+  };
   seg.append(git);
   return seg;
 }
@@ -974,53 +986,40 @@ async function pasteImages(items, insert) {
     }
   }
   if (!files.length) return false;
-  // A macOS screenshot arrives as the same image in two formats — png and tiff — and
-  // uploading both is why one paste produced two attachments. Several *types* means one
-  // picture described several ways: keep the best. Several files of the same type is a
-  // genuine multi-image paste, so keep those.
-  const types = new Set(files.map(f => f.type));
-  if (types.size > 1) {
-    const rank = (t) => { const i = IMAGE_RANK.indexOf(t); return i < 0 ? IMAGE_RANK.length : i; };
-    const best = files.slice().sort((a, b) => rank(a.type) - rank(b.type))[0].type;
-    files = files.filter(f => f.type === best);
+
+  // A macOS screenshot arrives as the same picture in two formats — png and tiff — so
+  // several *types* means one image described several ways: keep the best. Several
+  // files of one type is a genuine multi-image paste, so those all stay.
+  const rank = (t) => { const i = IMAGE_RANK.indexOf(t); return i < 0 ? IMAGE_RANK.length : i; };
+  files.sort((a, b) => rank(a.type) - rank(b.type));
+  if (new Set(files.map(f => f.type)).size > 1) {
+    files = files.filter(f => f.type === files[0].type);
   }
-  for (const f of files) {
-    let r;
+
+  const upload = async (f) => {
     try {
-      r = await (await fetch("/api/upload", { method: "POST",
+      return await (await fetch("/api/upload", { method: "POST",
         headers: { "Content-Type": f.type }, body: f })).json();
-    } catch { insert("[upload failed]"); continue; }
-    if (r.clipboard) {
-      // The image is on the host clipboard, so ⌃V lets the agent read it directly —
-      // no path in the prompt, just its own attachment marker.
-      insert("\x16");
-    } else if (r.path) {
-      // No shared clipboard (a remote instance): fall back to pasting the path, in
-      // bracketed-paste markers so it arrives as a paste rather than as typing.
-      insert("\x1b[200~" + r.path + "\x1b[201~");
-    } else {
-      insert("[" + (r.error || "upload failed") + "]");
-    }
+    } catch { return { error: "upload failed" }; }
+  };
+
+  const first = await upload(files[0]);
+  // The system clipboard holds *one* image and the agent reads it on every ⌃V, so two
+  // keystrokes attach the same picture twice — which is what doubled the screenshot.
+  // One paste, one keystroke, however many formats the clipboard offered.
+  if (first.clipboard) {
+    insert("\x16");
+    return true;
+  }
+  // No shared clipboard (a remote instance): each image gets its path instead, in
+  // bracketed-paste markers so it arrives as a paste rather than as typing.
+  for (let i = 0; i < files.length; i++) {
+    const r = i === 0 ? first : await upload(files[i]);
+    insert(r.path ? "\x1b[200~" + r.path + "\x1b[201~" : "[" + (r.error || "upload failed") + "]");
   }
   return true;
 }
 
-// Errors from an action belong next to the thing you clicked, not in a console.
-let TOAST = null;
-function toast(msg) {
-  if (!TOAST) {
-    TOAST = el("div", "toast");
-    document.body.append(TOAST);
-  }
-  TOAST.textContent = msg;
-  TOAST.classList.add("on");
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => TOAST.classList.remove("on"), 6000);
-}
-
-function send(pane, data) {
-  if (pane && pane.ws && pane.ws.readyState === 1) pane.ws.send(data);
-}
 function sendText(text) { send(PANES.get(ACTIVE), new TextEncoder().encode(text)); }
 
 // Font size survives a reload: on a phone the default is unreadable for some people
@@ -1100,11 +1099,13 @@ async function loadChanges(force, userAsked) {
 }
 
 function renderChanges() {
+  // Check *before* clearing. Clearing and then bailing out because a diff was open is
+  // what emptied the whole pane — tabs and all — when you clicked Git again.
+  if (CHFILE || CHREV) return;              // paintDiff owns the pane
   const bar = $("chbar"), body = $("chbody");
   bar.textContent = ""; body.textContent = "";
   const w = selected();
   if (!w) return;
-  if (CHFILE || CHREV) return;              // paintDiff owns the pane
   bar.append(tabs("changes"));
   const refresh = el("button", "b icon", "↻");
   refresh.title = "Re-read this worktree";
