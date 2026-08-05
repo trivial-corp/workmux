@@ -346,7 +346,7 @@ body.full main .pane { display:flex; }
 <nav>
   <button id="nav-work" aria-current="true" onclick="setSurface('work')">Work</button>
   <button id="nav-session" onclick="setSurface('session')">Session</button>
-  <button id="nav-changes" onclick="setSurface('changes')">Changes</button>
+  <button id="nav-changes" onclick="setSurface('changes')">Git</button>
 </nav>
 
 <script src="/vendor/xterm.js"></script>
@@ -517,7 +517,10 @@ function tabs(active) {
   sess.setAttribute("aria-current", active === "session" ? "true" : "false");
   if (mine.length) sess.append(el("span", "n", String(mine.length)));
   sess.append(el("span", "caret", "▾"));
-  sess.onclick = (e) => { setSurface("session"); sessionMenu(e.currentTarget, w, mine); };
+  // The label goes there, the caret opens the menu. Making the label do both meant
+  // clicking a tab to get back to your terminal popped a menu you didn't ask for.
+  sess.lastChild.onclick = (e) => { e.stopPropagation(); sessionMenu(sess, w, mine); };
+  sess.onclick = () => setSurface("session");
   seg.append(sess);
 
   // Shell is one click, because it's the one you want without thinking.
@@ -527,12 +530,18 @@ function tabs(active) {
   sh.onclick = () => openShell ? open(openShell.id) : start("shell");
   seg.append(sh);
 
-  const ch = el("button", null, "Changes");
-  ch.setAttribute("aria-current", active === "changes" ? "true" : "false");
-  const n = CH && CH.for === SEL ? (CH.files || []).length : null;
-  if (n) ch.append(el("span", "n", String(n)));
-  ch.onclick = () => setSurface("changes");
-  seg.append(ch);
+  // Git *is* the changes surface. They were two controls for one idea: a tab that
+  // shows the diff, and a button whose menu acted on the same branch.
+  const git = el("button", null, "Git");
+  git.setAttribute("aria-current", active === "changes" ? "true" : "false");
+  const n = CH && CH.for === SEL ? (CH.files || []).length : 0;
+  if (n) git.append(el("span", "n", String(n)));
+  if (w && w.behind > 0) git.append(el("span", "n", "⇣" + w.behind));
+  const caret = el("span", "caret", "▾");
+  caret.onclick = (e) => { e.stopPropagation(); gitMenu(git, w); };
+  git.append(caret);
+  git.onclick = () => setSurface("changes");
+  seg.append(git);
   return seg;
 }
 
@@ -599,8 +608,6 @@ function gitMenu(anchor, w) {
   });
   items.push({ label: "Fetch " + w.base, hint: "check for new commits", go: () => refreshDrift(w) });
   items.push({ sep: true });
-  items.push({ label: "Review changes", hint: (CH && CH.for === SEL ? (CH.files || []).length + " files" : ""),
-               go: () => setSurface("changes") });
   items.push({ label: "Open a git session", hint: "lazygit", go: () => start("git") });
   if ((w.prs || []).length && STATE.repo_url) {
     items.push({ sep: true });
@@ -674,14 +681,6 @@ function renderBar() {
           { title: "Containers for this work — it doesn't need them to exist" });
     }
   }
-  const g4 = group();
-  const git = el("button", "b", "Git");
-  git.dataset.menu = "git";
-  if (w.behind > 0) git.append(el("span", "badge", "⇣" + w.behind));
-  git.append(el("span", "caret", "▾"));
-  git.title = "Merge, fetch, review, or open a git session";
-  git.onclick = (e) => gitMenu(e.currentTarget, w);
-  g4.append(git);
   if (ACTIVE) {
     const g5 = group();
     btn(g5, "⤢", toggleFull, { cls: "icon", title: "Whole window" });
