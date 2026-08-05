@@ -2,7 +2,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>workmux</title>
-<link rel="stylesheet" href="/vendor/xterm.css">
+<!-- Ghostty's own VT, compiled to wasm, with an xterm-compatible API. One vendored
+     file: the wasm is inlined, so there is nothing to fetch and it works offline. It
+     renders to a canvas, so there is no stylesheet to load. -->
 <style>
 /* workmux — a patch bay for parallel work.
  *
@@ -142,12 +144,12 @@ main[data-surface="changes"] .pane { display:none; }
 .tab.dead .nm { text-decoration:line-through; opacity:.6; }
 @media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
 .term { flex:1 1 auto; min-height:0; background:var(--ink); overflow:hidden; position:relative; }
-/* One wrapper per session, created once and kept. xterm does not support calling
+/* One wrapper per session, created once and kept. A terminal cannot be re-opened by calling
    open() twice, and clearing the container to re-open it is how a pane came back
    blank after you switched tabs and returned. */
 .wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; display:none; }
 .wrap.on { display:block; }
-.wrap .xterm { height:100%; }
+.wrap canvas { display:block; }
 .hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
 .hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
 .hollow p { margin:0; font-size:12.5px; color:var(--t3); }
@@ -357,8 +359,7 @@ body.full main .pane { display:flex; }
   <button id="nav-changes" onclick="setSurface('changes')">Git</button>
 </nav>
 
-<script src="/vendor/xterm.js"></script>
-<script src="/vendor/xterm-addon-fit.js"></script>
+<script src="/vendor/ghostty-web.js"></script>
 <script>
 // Plain DOM on purpose, for now: this is being replaced by a TS build that a mobile
 // app will load as well, and porting the same logic twice is how details get lost.
@@ -873,9 +874,9 @@ async function kill(id) {
 }
 
 // open shows a pane, creating it once. Its element is never destroyed and the
-// Terminal is never re-opened: both of those leave xterm with a renderer attached to
+// Terminal is never re-opened: both of those leave the renderer attached to
 // a node that is no longer in the document, which is a pane that paints nothing.
-function open(id) {
+async function open(id) {
   ACTIVE = id;
   setSurface("session");
   const box = $("term");
@@ -885,7 +886,7 @@ function open(id) {
     const wrap = el("div", "wrap");
     wrap.dataset.session = id;
     box.append(wrap);
-    const term = new Terminal({
+    const term = new GhosttyWeb.Terminal({
       fontSize: FONT, lineHeight: 1.25,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       cursorBlink: true, scrollback: 8000,
@@ -894,12 +895,12 @@ function open(id) {
       theme: { background: "#0e0e13", foreground: "#e7e7ee", cursor: "#e7e7ee",
                selectionBackground: "#2b3a55" },
     });
-    const fit = new FitAddon.FitAddon();
+    const fit = new GhosttyWeb.FitAddon();
     term.loadAddon(fit);
     pane = { term, fit, ws: null, dead: false, wrap, wired: false };
     PANES.set(id, pane);
     wirePane(id, pane);
-    // macOS line-editing habits the browser swallows before xterm sees them, mapped
+    // macOS line-editing habits the browser swallows before the terminal sees them, mapped
     // to the control codes a readline or TUI actually listens for. Without these,
     // ⌘⏎ submits instead of adding a newline and ⌘← does nothing at all.
     const CHORDS = [
@@ -912,20 +913,28 @@ function open(id) {
       [e => e.altKey && e.key === "ArrowRight", "\x1bf"],    // word right
       [e => e.altKey && e.key === "Backspace", "\x1b\x7f"], // kill word
     ];
+    // The return value means the opposite of what xterm's did: here true says "I have
+    // handled this key, stop", and false says "you encode it". An xterm-compatible API
+    // is not an identical one, and returning xterm's `true` for every key swallowed
+    // every keystroke — the terminal painted, the prompt was there, and nothing typed
+    // arrived. ⌘V and ⌘C are left alone by the terminal itself, so the browser keeps them.
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
+      if (e.type !== "keydown") return false;
       for (const [match, bytes] of CHORDS) {
         if (match(e)) {
-          e.preventDefault();
           send(pane, new TextEncoder().encode(bytes));
-          return false;
+          return true;
         }
       }
-      return true;   // ⌘C/⌘V and the rest belong to the browser
+      return false;
     });
   }
   for (const [pid, p] of PANES) p.wrap.classList.toggle("on", pid === id);
-  if (!pane.opened) { pane.term.open(pane.wrap); pane.opened = true; }
+  if (!pane.opened) {
+    pane.opened = true;
+    await VT_READY;
+    pane.term.open(pane.wrap);
+  }
   // Two frames: the wrapper has just become visible, and fitting against a box that
   // is still zero-sized is how a session ends up 80×24 inside a wide window.
   requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -935,6 +944,17 @@ function open(id) {
   if (!pane.ws || pane.ws.readyState > 1) connect(id, pane);
   renderBar();
   renderKeys();
+}
+
+// What the visible terminal says, for tests and for debugging by hand. A canvas has no
+// text to read, so it comes from the terminal's own buffer.
+function screenText(id) {
+  const p = PANES.get(id || ACTIVE);
+  if (!p) return "";
+  p.term.selectAll();
+  const s = p.term.getSelection();
+  p.term.clearSelection();
+  return s;
 }
 
 // The empty state is a sibling of the panes, not a replacement for them.
@@ -951,7 +971,7 @@ function connect(id, pane) {
     // The server replays the scrollback on attach, so clear first or a reconnect
     // paints everything twice.
     pane.term.reset();
-    // Then fit and *say so*. The size in the URL above is whatever xterm defaulted to
+    // Then fit and *say so*. The size in the URL above is whatever the terminal defaulted to
     // before layout — 80×24 — and the fit that follows fires onResize while the socket
     // is still CONNECTING, so that message was dropped and the program kept drawing
     // into a corner until something else (changing the font) resized it again.
@@ -966,7 +986,7 @@ function connect(id, pane) {
       return;
     }
     // Bytes, not a decoded string: a multi-byte character split across two frames
-    // decodes to garbage if each frame is decoded on its own. xterm reassembles.
+    // decodes to garbage if each frame is decoded on its own. The terminal reassembles.
     pane.term.write(new Uint8Array(ev.data));
   };
   ws.onclose = () => { pane.dead = true; renderBar(); };
@@ -974,7 +994,7 @@ function connect(id, pane) {
 
 // Input is wired to the *pane*, once, and never to the connection.
 //
-// xterm's onData registrations accumulate: wiring them inside connect() added another
+// onData registrations accumulate: wiring them inside connect() added another
 // handler every time a session reconnected, so one keystroke was written twice — and one
 // ⌃V after a paste attached the same image twice. Typing "continue" produced
 // "ccoonnttiinnuuee".
@@ -1058,6 +1078,10 @@ function toast(msg) {
   toast._t = setTimeout(() => TOAST.classList.remove("on"), 6000);
 }
 
+// The VT is wasm and has to be instantiated once before any terminal exists. Kicked
+// off at load so it is almost always ready by the time you open a session.
+const VT_READY = GhosttyWeb.init();
+
 let BUILD = null, STALE = false;
 // The page keeps running the JS it loaded, so after an upgrade it can be older than the
 // server — and then you chase a bug that was fixed an hour ago. Say so instead.
@@ -1094,7 +1118,7 @@ function toggleFull() {
   if (p) { setTimeout(() => { p.fit.fit(); p.term.focus(); }, 0); }
 }
 
-// The terminal: xterm.js pastes text itself, so only images need handling here.
+// The terminal pastes text itself, so only images need handling here.
 $("term").addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
