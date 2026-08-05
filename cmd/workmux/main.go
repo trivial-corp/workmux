@@ -21,6 +21,7 @@ import (
 
 	"github.com/trivial-corp/workmux/internal/actions"
 	"github.com/trivial-corp/workmux/internal/agents"
+	"github.com/trivial-corp/workmux/internal/bg"
 	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
 	"github.com/trivial-corp/workmux/internal/initcmd"
@@ -230,6 +231,7 @@ func main() {
 			<-stop
 			fmt.Fprint(os.Stderr, "\n  stopping sessions…\n")
 			reg.Shutdown()
+			bg.Wait() // don't leave a background fetch running
 			os.Exit(0)
 		}()
 	}

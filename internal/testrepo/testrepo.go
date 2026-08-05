@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/trivial-corp/workmux/internal/bg"
 )
 
 // Repo is a temporary repository with a first commit on the default branch.
@@ -32,6 +34,10 @@ func New(t *testing.T, name string) *Repo {
 		t.Fatal(err)
 	}
 	r := &Repo{Root: root, t: t}
+	// Anything that reads work kicks a background fetch, and t.TempDir removes this
+	// directory when the test ends. Without waiting, that removal races a git process
+	// still writing into .git — a flake that only showed up on CI.
+	t.Cleanup(bg.Wait)
 	r.Git("init", "-q", "-b", "main")
 	// Identity and signing are set locally: a developer's global config must not
 	// decide whether the suite passes.

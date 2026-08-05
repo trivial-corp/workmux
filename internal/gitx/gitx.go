@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/trivial-corp/workmux/internal/bg"
 	"github.com/trivial-corp/workmux/internal/run"
 )
 
@@ -143,7 +144,9 @@ func KickFetch(root, base string) {
 	}
 	fetchedAt[root] = time.Now()
 	fetchMu.Unlock()
-	go run.Git(root, 45*time.Second, "fetch", "--quiet", "origin", base)
+	// Through bg, so this fetch can be waited on: a detached goroutine writing into
+	// .git outlived the test that started it and raced the removal of its own repo.
+	bg.Go(func() { run.Git(root, 45*time.Second, "fetch", "--quiet", "origin", base) })
 }
 
 var (

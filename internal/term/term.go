@@ -189,12 +189,16 @@ func (s *Session) pump() {
 	_ = s.cmd.Wait()
 	s.mu.Lock()
 	s.ended = time.Now()
+	// Mark it finished *before* telling anyone. A viewer reacts to its channel
+	// closing by asking whether the session ended, and closing the channels first
+	// meant it could be told no — the two signals disagreed for a few microseconds,
+	// which is exactly long enough for the answer to be wrong.
+	close(s.done)
 	for v := range s.viewers {
 		close(v.Out)
 	}
 	s.viewers = map[*Viewer]struct{}{}
 	s.mu.Unlock()
-	close(s.done)
 }
 
 func (s *Session) broadcast(chunk []byte) {
