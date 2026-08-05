@@ -318,7 +318,7 @@ body.full main .pane { display:flex; }
     <button class="b wide" onclick="openSheet('log')" title="What this workmux process has been doing">
       ▤<span class="lbl"> Server log</span></button>
     <button class="b icon narrow" onclick="openSheet('more')" title="More">⋯</button>
-    <button class="b icon" onclick="poll()" title="Refresh">↻</button>
+    <button class="b icon" onclick="poll(true)" title="Refresh">↻</button>
   </div>
 </header>
 
@@ -368,6 +368,8 @@ const PANES = new Map();   // session id → {term, fit, ws, dead}
 // ---- work ----
 
 let POLLING = 0;
+// The bar is for things you asked for. A background poll that draws a progress bar
+// every few seconds is just flicker, and it made the page look like it was reloading.
 function loading(on) {
   POLLING = Math.max(0, POLLING + (on ? 1 : -1));
   const bar = $("loading");
@@ -380,15 +382,32 @@ function loading(on) {
   }
 }
 
-async function poll() {
+// What the page actually draws. If this is unchanged there is nothing to redraw, and
+// rebuilding anyway is what threw away your scroll position and hover every few
+// seconds.
+function signature(d) {
+  return JSON.stringify([
+    d.name, d.base, d.next_slot, d.stack_enabled, d.terminal,
+    (d.work || []).map(w => [w.path, w.branch, w.tempo, w.live, w.behind, w.ahead, w.rank,
+      w.prs, w.stack && [w.stack.slot, w.stack.up, w.stack.total],
+      (w.agents || []).map(a => [a.id, a.name, a.tempo, a.detail]),
+      (w.sessions || []).map(s => [s.id, s.alive])]),
+  ]);
+}
+
+let SIG = null;
+
+async function poll(userAsked) {
+  // Don't redraw underneath an open menu or sheet: the anchor vanishes mid-click.
+  if (!userAsked && (MENU || SHEET)) return;
   let d;
-  loading(true);
+  if (userAsked) loading(true);
   try { d = await (await fetch("/api/work")).json(); }
   catch {
     // Keep the last picture. A blank dashboard is indistinguishable from a broken one,
     // and a briefly unreachable server is the common case, not a crash.
     $("stats").textContent = "reconnecting…";
-    loading(false);
+    if (userAsked) loading(false);
     return;
   }
   STATE = d; WORK = d.work || [];
@@ -408,11 +427,24 @@ async function poll() {
   if (d.stack_enabled) chip("next " + d.next_slot);
   $("btn-mcp").hidden = !(d.agent && d.agent.mcp);
   if (!SEL || !WORK.some(w => w.path === SEL)) SEL = (WORK[0] || {}).path || null;
-  renderWork();
-  await refreshSessions();
-  await loadChanges(!CH || CH.for !== SEL);
-  if ($("main").dataset.surface === "changes") renderChanges(); else renderBar();
-  loading(false);
+  const sig = signature(d);
+  const changed = sig !== SIG;
+  SIG = sig;
+  if (changed) {
+    // The list scrolls, and rebuilding it would jump you back to the top.
+    const list = $("list"), top = list.scrollTop;
+    renderWork();
+    list.scrollTop = top;
+  }
+  await refreshSessions(!changed);
+  // Diffs are only re-read when you're looking at them, or when the work changed.
+  const wantChanges = $("main").dataset.surface === "changes";
+  if (!CH || CH.for !== SEL) await loadChanges(true, userAsked);
+  else if (wantChanges && changed) await loadChanges(true, false);
+  if (changed || userAsked) { if (wantChanges) renderChanges(); else renderBar(); }
+  // A session that exists should be on screen, including on the very first paint.
+  if (!ACTIVE) showWork();
+  if (userAsked) loading(false);
 }
 
 // Bands make the server's ordering visible. It already sorts by what wants you, but
@@ -487,22 +519,45 @@ function strip(w, tone) {
   row.append(body);
   row.onclick = () => {
     SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
-    renderWork(); renderBar(); loadChanges(true);
+    renderWork();
     setSurface("session");
+    showWork();                  // its session, not an empty pane
+    loadChanges(true);
   };
   return row;
 }
 
 const selected = () => WORK.find(w => w.path === SEL) || null;
 
+// The session to show for a piece of work: the agent you're attached to, else whatever
+// is open. Switching work used to land on "pick a session" even when that work had
+// exactly one — which is never the answer you wanted.
+function sessionFor(path) {
+  const mine = SESSIONS.filter(s => s.cwd === path && s.alive);
+  return mine.find(s => s.kind === "attach") || mine[0] || null;
+}
+
+// Show that session, or clear the pane if there is nothing to show.
+function showWork() {
+  const s = sessionFor(SEL);
+  if (s && s.id !== ACTIVE) { open(s.id); return; }
+  if (!s) { ACTIVE = null; renderBar(); }
+}
+
 // ---- sessions ----
 
-async function refreshSessions() {
+let SESSIG = null;
+async function refreshSessions(quiet) {
+  let list = [];
   try {
     const d = await (await fetch("/api/session/list")).json();
-    SESSIONS = d.sessions || [];
-  } catch { SESSIONS = []; }   // --no-terminal: the route isn't there at all
-  renderBar();
+    list = d.sessions || [];
+  } catch { list = []; }   // --no-terminal: the route isn't there at all
+  const sig = JSON.stringify(list.map(s => [s.id, s.title, s.alive, s.cwd]));
+  const changed = sig !== SESSIG;
+  SESSIG = sig;
+  SESSIONS = list;
+  if (changed || !quiet) renderBar();
 }
 
 // One switch, rendered into whichever toolbar is showing, so it never moves.
@@ -991,17 +1046,17 @@ function renderKeys() {
 
 let CH = null, CHFILE = null, CHREV = null;
 
-async function loadChanges(force) {
+async function loadChanges(force, userAsked) {
   const w = selected();
   if (!w) return;
   if (!force && CH && CH.for === SEL) return renderChanges();
-  loading(true);
+  if (userAsked) loading(true);
   try {
     const d = await (await fetch("/api/changes?path=" + encodeURIComponent(SEL)
       + "&base=" + encodeURIComponent(w.base || ""))).json();
     CH = d; CH.for = SEL;
   } catch { CH = null; }
-  loading(false);
+  if (userAsked) loading(false);
   renderChanges();
 }
 
@@ -1401,6 +1456,9 @@ if (window.visualViewport) {
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
-poll();
-setInterval(poll, 4000);
+poll(true);
+// Six seconds, and nothing at all while the tab is in the background — a dashboard
+// nobody is looking at doesn't need to ask.
+setInterval(() => { if (!document.hidden) poll(false); }, 6000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(false); });
 </script>
