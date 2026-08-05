@@ -303,6 +303,10 @@ body.full main .pane { display:flex; }
 #loading { position:fixed; top:0; left:0; height:2px; width:0; background:var(--accent);
            opacity:0; transition:width .25s ease, opacity .2s; z-index:40; }
 #loading.on { opacity:1; }
+.stale { position:fixed; z-index:50; left:50%; transform:translateX(-50%); top:10px;
+         display:flex; gap:12px; align-items:center; padding:9px 12px; border-radius:var(--r);
+         background:var(--elev-2); border:1px solid #37436b; color:var(--t1);
+         font-size:12.5px; box-shadow:0 14px 34px #000b; }
 .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
          display:none; max-width:min(90vw,52ch); padding:9px 13px; border-radius:var(--r);
          background:var(--elev-2); border:1px solid #5c452b; color:var(--wants);
@@ -429,6 +433,13 @@ async function poll(userAsked) {
   if (live) chip(live + " working");
   chip(d.base);
   if (d.stack_enabled) chip("next " + d.next_slot);
+  // The page you are looking at keeps running the JS it loaded. After an upgrade or a
+  // restart that JS can be older than the server, and then you're debugging a bug that
+  // was fixed an hour ago — so say so instead of letting it happen quietly.
+  if (d.build) {
+    if (!BUILD) BUILD = d.build;
+    else if (BUILD !== d.build) staleNotice();
+  }
   $("btn-mcp").hidden = !(d.agent && d.agent.mcp);
   if (!SEL || !WORK.some(w => w.path === SEL)) SEL = (WORK[0] || {}).path || null;
   const sig = signature(d);
@@ -885,8 +896,9 @@ function open(id) {
     });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
-    pane = { term, fit, ws: null, dead: false, wrap };
+    pane = { term, fit, ws: null, dead: false, wrap, wired: false };
     PANES.set(id, pane);
+    wirePane(id, pane);
     // macOS line-editing habits the browser swallows before xterm sees them, mapped
     // to the control codes a readline or TUI actually listens for. Without these,
     // ⌘⏎ submits instead of adding a newline and ⌘← does nothing at all.
@@ -958,14 +970,24 @@ function connect(id, pane) {
     pane.term.write(new Uint8Array(ev.data));
   };
   ws.onclose = () => { pane.dead = true; renderBar(); };
-  // Keystrokes go as raw bytes: what the terminal emits is what the program reads,
-  // with nothing in between to escape or misinterpret.
+}
+
+// Input is wired to the *pane*, once, and never to the connection.
+//
+// xterm's onData registrations accumulate: wiring them inside connect() added another
+// handler every time a session reconnected, so one keystroke was written twice — and one
+// ⌃V after a paste attached the same image twice. Typing "continue" produced
+// "ccoonnttiinnuuee".
+function wirePane(id, pane) {
+  if (pane.wired) return;
+  pane.wired = true;
+  // Raw bytes: what the terminal emits is what the program reads, with nothing in
+  // between to escape or misinterpret.
   const enc = new TextEncoder();
   pane.term.onData((d) => send(pane, enc.encode(d)));
   pane.term.onResize(({ cols, rows }) => {
-    // Only the pane you are actually looking at reports its size. A hidden pane, or
-    // a backgrounded tab, reporting one is how the PTY ended up oscillating between
-    // two sizes and shredding the screen.
+    // Only the pane you are actually looking at reports its size. A hidden pane, or a
+    // backgrounded tab, reporting one is how the PTY oscillated between two sizes.
     if (document.hidden || ACTIVE !== id) return;
     send(pane, JSON.stringify({ t: "size", cols, rows }));
   });
@@ -1023,6 +1045,33 @@ async function pasteImages(items, insert) {
 // Everything that reaches a pty goes through here: keystrokes, key-bar taps, resize
 // notices, the ⌃V after a paste. A rewrite of the paste path deleted it and every one of
 // those silently became a ReferenceError.
+// Errors from an action belong next to the thing you clicked, not in a console.
+let TOAST = null;
+function toast(msg) {
+  if (!TOAST) {
+    TOAST = el("div", "toast");
+    document.body.append(TOAST);
+  }
+  TOAST.textContent = msg;
+  TOAST.classList.add("on");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => TOAST.classList.remove("on"), 6000);
+}
+
+let BUILD = null, STALE = false;
+// The page keeps running the JS it loaded, so after an upgrade it can be older than the
+// server — and then you chase a bug that was fixed an hour ago. Say so instead.
+function staleNotice() {
+  if (STALE) return;
+  STALE = true;
+  const bar = el("div", "stale");
+  bar.append(el("span", null, "workmux was updated — this page is running the old version."));
+  const go = el("button", "b primary", "Reload");
+  go.onclick = () => location.reload();
+  bar.append(go);
+  document.body.append(bar);
+}
+
 function send(pane, data) {
   if (pane && pane.ws && pane.ws.readyState === 1) pane.ws.send(data);
 }

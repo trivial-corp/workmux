@@ -169,7 +169,7 @@ func main() {
 	}
 
 	reader := &agents.Reader{JobsDir: cfg.JobsDir(), Process: cfg.Agent.Process}
-	builder := &work.Builder{Cfg: cfg, Agents: reader, Terminal: !opts.noTerm}
+	builder := &work.Builder{Cfg: cfg, Agents: reader, Terminal: !opts.noTerm, BuildID: web.Build()}
 	srv := &web.Server{Cfg: cfg, Builder: builder, Token: token,
 		Origins: origins(opts.host, opts.port), DevDir: devDir,
 		Verbose: opts.verbose || opts.devSet}

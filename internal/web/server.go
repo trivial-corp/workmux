@@ -8,7 +8,9 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -32,6 +34,30 @@ import (
 //
 //go:embed all:dist
 var ui embed.FS
+
+// build fingerprints the frontend this binary serves. A page keeps running the JS it
+// loaded, so after an upgrade or a restart you can be looking at an interface that no
+// longer matches the server — and chasing a bug that was fixed an hour ago. The page
+// compares this with what it started with and offers to reload.
+var build = func() string {
+	h := sha256.New()
+	_ = fs.WalkDir(ui, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		b, err := ui.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		h.Write([]byte(path))
+		h.Write(b)
+		return nil
+	})
+	return hex.EncodeToString(h.Sum(nil))[:12]
+}()
+
+// Build is the fingerprint of the embedded frontend.
+func Build() string { return build }
 
 // Loopback hosts never need a token.
 var loopback = map[string]bool{

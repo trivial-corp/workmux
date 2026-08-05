@@ -98,6 +98,9 @@ type View struct {
 	Profiles     string    `json:"profiles"`
 	Terminal     bool      `json:"terminal"`
 	Agent        AgentCaps `json:"agent"`
+	// Build fingerprints the frontend this server serves, so a page can notice it is
+	// older than the server and stop you debugging a bug that's already fixed.
+	Build string `json:"build"`
 }
 
 // Builder assembles the view. It holds the readers so their caches survive polls.
@@ -105,6 +108,8 @@ type Builder struct {
 	Cfg      *config.Config
 	Agents   *agents.Reader
 	Terminal bool
+	// BuildID is the frontend fingerprint, passed through to the view.
+	BuildID string
 	// Sessions returns the live sessions; nil while the terminal layer is off.
 	Sessions func() []Session
 }
@@ -262,7 +267,7 @@ func (b *Builder) Build() View {
 		Root: root, Base: base, Work: items, Name: cfg.Name,
 		StackEnabled: cfg.HasStack(), RepoURL: gitx.WebURL(root),
 		OpenPRs: unchecked, NextSlot: stack.NextFreeSlot(cfg, running),
-		Profiles: cfg.Profiles(), Terminal: b.Terminal,
+		Profiles: cfg.Profiles(), Terminal: b.Terminal, Build: b.BuildID,
 		Agent: AgentCaps{
 			Name: nameOr(a.Name, "agent"), Run: a.Command != "", Spawn: a.Spawn != "",
 			Attach: a.Attach != "", Jobs: cfg.JobsDir() != "", MCP: a.MCP != "",
