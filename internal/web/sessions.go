@@ -115,6 +115,10 @@ func (s *Server) handleSessionKill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.Kill()
+	// Explicitly killed means gone. The grace period exists so a session that ended on
+	// its own leaves its last output readable; a session you closed shouldn't come back
+	// in the next poll looking like the close didn't work.
+	s.Sessions.Reg.Forget(req.ID)
 	Journal.Note("session %s killed", req.ID)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

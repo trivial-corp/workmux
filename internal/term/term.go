@@ -389,6 +389,15 @@ func (r *Registry) gc() {
 	}
 }
 
+// Forget drops a session from the registry without waiting for the grace period. It's
+// what an explicit close means: the grace period is for sessions that ended on their
+// own, whose last output is usually the reason you're looking.
+func (r *Registry) Forget(id string) {
+	r.mu.Lock()
+	delete(r.byID, id)
+	r.mu.Unlock()
+}
+
 // Shutdown kills everything, for process exit.
 func (r *Registry) Shutdown() {
 	r.mu.Lock()

@@ -141,9 +141,13 @@ main[data-surface="changes"] .pane { display:none; }
 .tab .x:hover { color:var(--danger); background:#1e1315; }
 .tab.dead .nm { text-decoration:line-through; opacity:.6; }
 @media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
-.term { flex:1 1 auto; min-height:0; padding:8px 4px 4px 10px; background:var(--ink);
-        overflow:hidden; }
-.term .xterm { height:100%; }
+.term { flex:1 1 auto; min-height:0; background:var(--ink); overflow:hidden; position:relative; }
+/* One wrapper per session, created once and kept. xterm does not support calling
+   open() twice, and clearing the container to re-open it is how a pane came back
+   blank after you switched tabs and returned. */
+.wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; display:none; }
+.wrap.on { display:block; }
+.wrap .xterm { height:100%; }
 .hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
 .hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
 .hollow p { margin:0; font-size:12.5px; color:var(--t3); }
@@ -272,6 +276,25 @@ nav { display:none; }
 body.full header, body.full .list, body.full .changes, body.full nav { display:none; }
 body.full main { grid-template-columns:1fr; }
 body.full main .pane { display:flex; }
+.seg .caret { margin-left:6px; opacity:.6; font-size:10px; }
+.b .badge { margin-left:6px; font-family:var(--mono); font-size:10px; color:var(--wants); }
+.menu { position:fixed; z-index:30; min-width:230px; padding:5px; border-radius:9px;
+        background:var(--elev); border:1px solid var(--line); box-shadow:0 18px 44px #000b;
+        display:grid; gap:1px; }
+.mrow { display:flex; gap:12px; align-items:baseline; width:100%; padding:7px 9px;
+        background:transparent; border:0; border-radius:6px; cursor:pointer; text-align:left;
+        font-size:12.5px; color:var(--t1); }
+.mrow:hover:not([disabled]) { background:var(--elev-2); }
+.mrow[disabled] { color:var(--t3); cursor:default; }
+.mrow.on { color:var(--accent); }
+.mrow.danger:hover { color:var(--danger); }
+.mrow .ml { flex:1 1 auto; }
+.mrow .mh { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap; }
+.msep { height:1px; background:var(--line); margin:4px 2px; }
+/* A refresh that blanks the screen looks like a crash. This is the only signal. */
+#loading { position:fixed; top:0; left:0; height:2px; width:0; background:var(--accent);
+           opacity:0; transition:width .25s ease, opacity .2s; z-index:40; }
+#loading.on { opacity:1; }
 .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
          display:none; max-width:min(90vw,52ch); padding:9px 13px; border-radius:var(--r);
          background:var(--elev-2); border:1px solid #5c452b; color:var(--wants);
@@ -279,6 +302,7 @@ body.full main .pane { display:flex; }
 .toast.on { display:block; }
 </style>
 
+<div id="loading"></div>
 <header>
   <div class="brand"><span class="proj" id="proj">…</span><span class="tool">workmux</span></div>
   <div class="stats" id="stats"></div>
@@ -303,7 +327,7 @@ body.full main .pane { display:flex; }
 </div>
 
 <main id="main" data-surface="work">
-  <div class="list" id="list"></div>
+  <div class="list" id="list"><div class="hollow"><p>Reading worktrees…</p></div></div>
   <div class="pane">
     <div class="bar" id="bar"></div>
     <div class="term" id="term"></div>
@@ -339,10 +363,30 @@ const PANES = new Map();   // session id → {term, fit, ws, dead}
 
 // ---- work ----
 
+let POLLING = 0;
+function loading(on) {
+  POLLING = Math.max(0, POLLING + (on ? 1 : -1));
+  const bar = $("loading");
+  if (POLLING > 0) {
+    bar.classList.add("on");
+    bar.style.width = "70%";       // creeps; it doesn't pretend to know how long
+  } else {
+    bar.style.width = "100%";
+    setTimeout(() => { if (POLLING === 0) { bar.classList.remove("on"); bar.style.width = "0"; } }, 200);
+  }
+}
+
 async function poll() {
   let d;
+  loading(true);
   try { d = await (await fetch("/api/work")).json(); }
-  catch { $("stats").textContent = "server unreachable"; return; }
+  catch {
+    // Keep the last picture. A blank dashboard is indistinguishable from a broken one,
+    // and a briefly unreachable server is the common case, not a crash.
+    $("stats").textContent = "reconnecting…";
+    loading(false);
+    return;
+  }
   STATE = d; WORK = d.work || [];
   // One instance per project is the normal case, so the tab has to say which. The
   // project comes first because titles truncate from the right.
@@ -364,6 +408,7 @@ async function poll() {
   await refreshSessions();
   await loadChanges(!CH || CH.for !== SEL);
   if ($("main").dataset.surface === "changes") renderChanges(); else renderBar();
+  loading(false);
 }
 
 // Bands make the server's ordering visible. It already sorts by what wants you, but
@@ -459,17 +504,128 @@ async function refreshSessions() {
 // One switch, rendered into whichever toolbar is showing, so it never moves.
 function tabs(active) {
   const seg = el("div", "seg");
-  const add = (key, label, count) => {
-    const b = el("button", null, label);
-    b.setAttribute("aria-current", active === key ? "true" : "false");
-    if (count != null) b.append(el("span", "n", String(count)));
-    b.onclick = () => setSurface(key);
-    seg.append(b);
-  };
-  add("session", "Session", (SESSIONS.filter(s => s.cwd === SEL).length) || null);
+  const w = selected();
+  const mine = SESSIONS.filter(s => s.cwd === SEL && s.alive);
+
+  // Session is a menu: the agent is the default, and everything else a session can be
+  // lives behind the caret rather than as four more buttons in the row.
+  const sess = el("button", null, "Session");
+  sess.setAttribute("aria-current", active === "session" ? "true" : "false");
+  if (mine.length) sess.append(el("span", "n", String(mine.length)));
+  sess.append(el("span", "caret", "▾"));
+  sess.onclick = (e) => { setSurface("session"); sessionMenu(e.currentTarget, w, mine); };
+  seg.append(sess);
+
+  // Shell is one click, because it's the one you want without thinking.
+  const sh = el("button", null, "Shell");
+  const openShell = mine.find(s => s.kind === "shell");
+  sh.setAttribute("aria-current", (active === "session" && openShell && openShell.id === ACTIVE) ? "true" : "false");
+  sh.onclick = () => openShell ? open(openShell.id) : start("shell");
+  seg.append(sh);
+
+  const ch = el("button", null, "Changes");
+  ch.setAttribute("aria-current", active === "changes" ? "true" : "false");
   const n = CH && CH.for === SEL ? (CH.files || []).length : null;
-  add("changes", "Changes", n || null);
+  if (n) ch.append(el("span", "n", String(n)));
+  ch.onclick = () => setSurface("changes");
+  seg.append(ch);
   return seg;
+}
+
+// ---- menus ----
+
+let MENU = null;
+function closeMenu() { if (MENU) { MENU.remove(); MENU = null; } }
+document.addEventListener("click", (e) => {
+  if (MENU && !MENU.contains(e.target) && !e.target.closest(".seg button, .b.menu")) closeMenu();
+}, true);
+
+function menu(anchor, items) {
+  closeMenu();
+  const m = el("div", "menu");
+  for (const it of items) {
+    if (it.sep) { m.append(el("div", "msep")); continue; }
+    const row = el("button", "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : ""));
+    row.append(el("span", "ml", it.label));
+    if (it.hint) row.append(el("span", "mh", it.hint));
+    row.disabled = !!it.disabled;
+    row.onclick = () => { closeMenu(); it.go && it.go(); };
+    m.append(row);
+  }
+  document.body.append(m);
+  const r = anchor.getBoundingClientRect();
+  m.style.top = Math.round(r.bottom + 4) + "px";
+  m.style.left = Math.round(Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+  MENU = m;
+}
+
+function sessionMenu(anchor, w, mine) {
+  if (!w) return;
+  const caps = STATE.agent || {};
+  const items = [];
+  for (const s of mine) {
+    items.push({ label: sessionLabel(s, w), hint: s.id === ACTIVE ? "open" : "", on: s.id === ACTIVE,
+                 go: () => open(s.id) });
+  }
+  if (mine.length) items.push({ sep: true });
+  const attached = mine.some(s => s.kind === "attach");
+  if (w.agents.length && caps.attach && !attached) {
+    items.push({ label: "Resume " + (w.agents[0].name || "the agent"), hint: "⌥R", go: () => start("resume") });
+  } else if (!w.agents.length && caps.run) {
+    items.push({ label: "Start " + (caps.name || "an agent"), go: () => start("agent") });
+  }
+  items.push({ label: "Shell", go: () => start("shell") });
+  items.push({ label: "Git", hint: "lazygit", go: () => start("git") });
+  items.push({ label: "Container logs", hint: w.stack ? w.stack.slot : "nothing running",
+               disabled: !w.stack, go: () => start("logs") });
+  if (ACTIVE) {
+    items.push({ sep: true });
+    items.push({ label: "Close this session", danger: true, go: () => kill(ACTIVE) });
+  }
+  menu(anchor, items);
+}
+
+// Git is a menu too, because "merge main" alone was the only git verb on offer and it
+// isn't the only one you want.
+function gitMenu(anchor, w) {
+  const items = [];
+  const behind = w.behind > 0, ahead = w.ahead > 0;
+  items.push({
+    label: behind ? "Merge " + w.base + " in" : "Up to date with " + w.base,
+    hint: behind ? "⇣" + w.behind : "", disabled: !behind, go: () => mergeBase(w),
+  });
+  items.push({ label: "Fetch " + w.base, hint: "check for new commits", go: () => refreshDrift(w) });
+  items.push({ sep: true });
+  items.push({ label: "Review changes", hint: (CH && CH.for === SEL ? (CH.files || []).length + " files" : ""),
+               go: () => setSurface("changes") });
+  items.push({ label: "Open a git session", hint: "lazygit", go: () => start("git") });
+  if ((w.prs || []).length && STATE.repo_url) {
+    items.push({ sep: true });
+    for (const n of w.prs.slice(0, 4)) {
+      items.push({ label: "Pull request #" + n, hint: "github",
+                   go: () => window.open(STATE.repo_url + "/pull/" + n, "_blank") });
+    }
+  }
+  menu(anchor, items);
+}
+
+async function mergeBase(w) {
+  toast("Merging " + w.base + " into " + w.branch + "…");
+  let r;
+  try {
+    r = await (await fetch("/api/update", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: SEL, base: w.base }) })).json();
+  } catch { r = { error: "server unreachable" }; }
+  toast(r.error ? r.error : "Merged " + w.base + " in");
+  poll(); loadChanges(true);
+}
+
+async function refreshDrift(w) {
+  toast("Fetching " + w.base + "…");
+  await poll();
+  const now = WORK.find(x => x.path === SEL) || w;
+  toast(now.behind > 0 ? now.behind + " commits behind " + now.base : "Up to date with " + now.base);
 }
 
 function renderBar() {
@@ -494,40 +650,11 @@ function renderBar() {
     return b;
   };
 
-  // Open sessions are tabs — they pick what you're looking at, which is not what the
-  // buttons beside them do, so they don't look like buttons.
-  if (mine.length) {
-    const strip = el("div", "tabs");
-    for (const s of mine) {
-      const t = el("button", "tab" + (s.alive ? "" : " dead"));
-      t.setAttribute("aria-current", s.id === ACTIVE ? "true" : "false");
-      t.append(el("span", "nm", sessionLabel(s, w)));
-      if (s.id === ACTIVE) {
-        const x = el("span", "x", "✕");
-        x.title = "Kill this session";
-        x.onclick = (e) => { e.stopPropagation(); kill(s.id); };
-        t.append(x);
-      }
-      t.onclick = () => open(s.id);
-      strip.append(t);
-    }
-    bar.append(strip);
+  // What this session is, so the row says something when a pane is open.
+  if (ACTIVE) {
+    const s = mine.find(x => x.id === ACTIVE);
+    if (s) bar.append(el("span", "who", sessionLabel(s, w) + (s.alive ? "" : " · ended")));
   }
-
-  // Then how to start one — and only the ones that aren't already open. A "resume"
-  // beside a tab for the very same agent is two controls for one thing.
-  const attached = mine.some(s => s.kind === "attach" && s.alive);
-  const g2 = group();
-  if (w.agents && w.agents.length && caps.attach && !attached) {
-    btn(g2, "❯ resume", () => start("resume"),
-        { cls: "primary", title: "Take over " + (w.agents[0].name || "this worktree's agent") });
-  } else if (!w.agents.length && caps.run) {
-    btn(g2, "＋ " + (caps.name || "agent"), () => start("agent"),
-        { cls: "primary", title: "Start an agent in this worktree" });
-  }
-  btn(g2, "＋ shell", () => start("shell"));
-  btn(g2, "＋ git", () => start("git"), { title: "lazygit, tig, or a log" });
-  if (w.stack) btn(g2, "＋ logs", () => start("logs"), { title: "Tail this work's containers" });
 
   // Then the app, then the branch. Grouped, so a destructive button never sits next
   // to the one you press all the time.
@@ -544,23 +671,11 @@ function renderBar() {
     }
   }
   const g4 = group();
-  if (w.behind > 0) {
-    btn(g4, "⇣ merge " + w.base, async (e) => {
-      const b = e.target; b.disabled = true; b.textContent = "merging…";
-      let r;
-      try {
-        r = await (await fetch("/api/update", { method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: SEL, base: w.base }) })).json();
-      } catch { r = { error: "server unreachable" }; }
-      if (r.error) toast(r.error); else toast("Merged " + w.base + " in");
-      poll(); loadChanges(true);
-    }, { title: "Bring in the " + w.behind + " commits this branch is behind" });
-  }
-  for (const n of (w.prs || []).slice(0, 2)) {
-    if (STATE.repo_url) btn(g4, "#" + n, () => window.open(STATE.repo_url + "/pull/" + n, "_blank"),
-                            { title: "Open PR #" + n });
-  }
+  const git = el("button", "b menu", "Git");
+  if (w.behind > 0) git.append(el("span", "badge", "⇣" + w.behind));
+  git.title = "Merge, fetch, review, or open a git session";
+  git.onclick = (e) => gitMenu(e.currentTarget, w);
+  g4.append(git);
   if (ACTIVE) {
     const g5 = group();
     btn(g5, "⤢", toggleFull, { cls: "icon", title: "Whole window" });
@@ -597,7 +712,8 @@ async function stackAction(action, w) {
 
 function showEmpty(existing) {
   const t = $("term");
-  t.textContent = "";
+  hideHollow();
+  for (const p of PANES.values()) p.wrap.classList.remove("on");
   const w = selected();
   const box = el("div", "hollow");
   if (existing) {
@@ -643,23 +759,31 @@ async function start(kind) {
 }
 
 async function kill(id) {
+  // Gone from the row immediately. Waiting for the next poll to agree left a tab you
+  // had just closed sitting there, which reads as the close not working.
+  const p = PANES.get(id);
+  if (p) { p.wrap.remove(); p.term.dispose(); PANES.delete(id); }
+  SESSIONS = SESSIONS.filter(s => s.id !== id);
+  if (ACTIVE === id) ACTIVE = null;
+  renderBar();
   await fetch("/api/session/kill", { method: "POST",
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) }).catch(() => {});
-  const p = PANES.get(id);
-  if (p) { p.term.dispose(); PANES.delete(id); }
-  if (ACTIVE === id) ACTIVE = null;
   await refreshSessions();
 }
 
-// open attaches a pane, reusing one we already have so switching back doesn't
-// repaint from scratch.
+// open shows a pane, creating it once. Its element is never destroyed and the
+// Terminal is never re-opened: both of those leave xterm with a renderer attached to
+// a node that is no longer in the document, which is a pane that paints nothing.
 function open(id) {
   ACTIVE = id;
   setSurface("session");
   const box = $("term");
-  box.textContent = "";
+  hideHollow();
   let pane = PANES.get(id);
   if (!pane) {
+    const wrap = el("div", "wrap");
+    wrap.dataset.session = id;
+    box.append(wrap);
     const term = new Terminal({
       fontSize: FONT, lineHeight: 1.25,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -671,7 +795,7 @@ function open(id) {
     });
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
-    pane = { term, fit, ws: null, dead: false };
+    pane = { term, fit, ws: null, dead: false, wrap };
     PANES.set(id, pane);
     // macOS line-editing habits the browser swallows before xterm sees them, mapped
     // to the control codes a readline or TUI actually listens for. Without these,
@@ -698,13 +822,21 @@ function open(id) {
       return true;   // ⌘C/⌘V and the rest belong to the browser
     });
   }
-  pane.term.open(box);
-  pane.fit.fit();
+  for (const [pid, p] of PANES) p.wrap.classList.toggle("on", pid === id);
+  if (!pane.opened) { pane.term.open(pane.wrap); pane.opened = true; }
+  // Two frames: the wrapper has just become visible, and fitting against a box that
+  // is still zero-sized is how a session ends up 80×24 inside a wide window.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try { pane.fit.fit(); } catch {}
+    pane.term.focus();
+  }));
   if (!pane.ws || pane.ws.readyState > 1) connect(id, pane);
-  pane.term.focus();
   renderBar();
   renderKeys();
 }
+
+// The empty state is a sibling of the panes, not a replacement for them.
+function hideHollow() { const h = $("term").querySelector(".hollow"); if (h) h.remove(); }
 
 function connect(id, pane) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -858,11 +990,13 @@ async function loadChanges(force) {
   const w = selected();
   if (!w) return;
   if (!force && CH && CH.for === SEL) return renderChanges();
+  loading(true);
   try {
     const d = await (await fetch("/api/changes?path=" + encodeURIComponent(SEL)
       + "&base=" + encodeURIComponent(w.base || ""))).json();
     CH = d; CH.for = SEL;
   } catch { CH = null; }
+  loading(false);
   renderChanges();
 }
 
