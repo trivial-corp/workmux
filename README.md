@@ -37,6 +37,28 @@ Two details it gets right, because both were bugs first:
   stand, not a change in flight — and worktrees live *inside* it, so a naive
   prefix check marks it permanently busy.
 
+## What you get
+
+- **Sessions are real PTYs**, rendered by [Ghostty's own emulator](https://github.com/coder/ghostty-web)
+  compiled to wasm — the same code as the native app rather than a reimplementation in
+  JavaScript. Not a pipe either: a process with a controlling terminal has a foreground
+  job, so ⌃C reaches the program you're looking at, `less` pages, and a full-screen agent
+  UI draws. Sessions live in the server, so reload the page, switch worktrees or restart a
+  stack and the browser reattaches and replays what it missed. Closing a tab detaches;
+  `✕` kills the process group.
+- **Agents mapped to worktrees exactly**, read from the agent's own state rather than
+  guessed — so "who is working here" and "is it running right now" are answers.
+- **New work in a couple of seconds.** Describe the task; the branch name comes from what
+  you wrote. It branches off the remote, copies the gitignored files a worktree needs,
+  starts an agent, and **starts no containers**.
+- **Changes as HTML** — files with status and line counts, a diff per file, and the
+  commits this branch has that its base doesn't, laid out to be readable at 400px.
+- **A stack per piece of work**, if the project has one, with its own slot, URL and logs.
+- **MCP servers** with whether an agent can actually *reach* each one — registration
+  isn't reachability, and both failure modes are otherwise silent.
+- **It works on a phone.** One surface at a time below 900px, a key bar for what a phone
+  keyboard lacks, and a screenshot pasted into a session reaches the agent as an image.
+
 ## Install
 
 ```sh
