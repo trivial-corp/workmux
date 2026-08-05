@@ -299,6 +299,30 @@ func (s *Session) resize() {
 	_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 }
 
+// Nudge makes the program redraw, by changing the window size and putting it back.
+//
+// A full-screen program (an agent's UI, vim, less) owns the alternate screen and only
+// repaints when something tells it to. Two things conspire on attach: a replayed byte
+// log can't reliably reconstruct someone else's screen, and resizing an xterm that is in
+// the alternate buffer *discards* what was there. The result is a pane with nothing but a
+// cursor — which is exactly why changing the font size fixed it, since that resized the
+// PTY and the program redrew.
+//
+// So: one column narrower, then back. Two SIGWINCHes, and the program paints its own
+// screen rather than us trying to reproduce it.
+func (s *Session) Nudge() {
+	s.mu.Lock()
+	cols, rows, f := s.cols, s.rows, s.pty
+	ended := !s.ended.IsZero()
+	s.mu.Unlock()
+	if ended || cols < 2 || rows < 1 {
+		return
+	}
+	_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(cols - 1), Rows: uint16(rows)})
+	time.Sleep(60 * time.Millisecond)
+	_ = pty.Setsize(f, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+}
+
 // Size is the current PTY size.
 func (s *Session) Size() (int, int) {
 	s.mu.Lock()

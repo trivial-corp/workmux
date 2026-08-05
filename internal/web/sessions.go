@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/trivial-corp/workmux/internal/bg"
 	"github.com/trivial-corp/workmux/internal/term"
 )
 
@@ -168,6 +169,15 @@ func (s *Server) handleSessionSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Then ask the program to paint its own screen. A replayed byte log can't
+	// reconstruct a full-screen UI, and the viewer's first resize wipes the alternate
+	// buffer anyway — so attaching used to leave a pane with only a cursor in it.
+	// Delayed a little, so it lands after the client has applied the replay and settled
+	// on its size.
+	bg.Go(func() {
+		time.Sleep(250 * time.Millisecond)
+		sess.Nudge()
+	})
 
 	// Reader: keystrokes and control messages.
 	go func() {

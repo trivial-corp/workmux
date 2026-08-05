@@ -1020,6 +1020,13 @@ async function pasteImages(items, insert) {
   return true;
 }
 
+// Everything that reaches a pty goes through here: keystrokes, key-bar taps, resize
+// notices, the ⌃V after a paste. A rewrite of the paste path deleted it and every one of
+// those silently became a ReferenceError.
+function send(pane, data) {
+  if (pane && pane.ws && pane.ws.readyState === 1) pane.ws.send(data);
+}
+
 function sendText(text) { send(PANES.get(ACTIVE), new TextEncoder().encode(text)); }
 
 // Font size survives a reload: on a phone the default is unreadable for some people

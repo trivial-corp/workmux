@@ -338,3 +338,48 @@ func collect(ch <-chan []byte, d time.Duration, want string) string {
 		}
 	}
 }
+
+// A full-screen program owns the alternate screen and repaints only when told. Attaching
+// used to leave a pane with nothing but a cursor: the replay can't reconstruct someone
+// else's screen, and the viewer's own resize wipes the alternate buffer. Nudge makes the
+// program redraw its own screen.
+func TestNudgeMakesTheProgramRedraw(t *testing.T) {
+	r := NewRegistry()
+	defer r.Shutdown()
+
+	// Draws only on SIGWINCH — so anything we see afterwards came from the program.
+	s, err := r.Start(Spec{Kind: KindShell, CWD: t.TempDir(), Cols: 90, Rows: 30,
+		Command: `sh -c 'trap "printf REDREW-ON-WINCH" WINCH; printf "\033[?1049h\033[2J"; while :; do sleep 0.1; done'`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Attach(90, 30)
+	// Let it install the trap and clear the screen.
+	waitFor(t, "the alternate screen", func() bool { return strings.Contains(s.Drain(), "[?1049h") })
+	before := s.Drain()
+	if strings.Contains(before, "REDREW-ON-WINCH") {
+		t.Fatal("it drew before being asked; the test proves nothing")
+	}
+
+	s.Nudge()
+	got := collect(v.Out, 5*time.Second, "REDREW-ON-WINCH")
+	if !strings.Contains(got, "REDREW-ON-WINCH") {
+		t.Errorf("the program was never asked to redraw:\n%q", got)
+	}
+	// And the size it ends on is the size it started with, not one column short.
+	waitFor(t, "the size to come back", func() bool { c, _ := s.Size(); return c == 90 })
+}
+
+// Nudging a finished session must not panic or resize a closed pty.
+func TestNudgeAfterExit(t *testing.T) {
+	r := NewRegistry()
+	defer r.Shutdown()
+	s, err := r.Start(Spec{Kind: KindShell, CWD: t.TempDir(), Command: "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.WaitExit(10 * time.Second) {
+		t.Fatal("did not exit")
+	}
+	s.Nudge() // must be a no-op
+}
