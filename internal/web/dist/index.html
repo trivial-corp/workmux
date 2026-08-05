@@ -442,8 +442,9 @@ async function poll(userAsked) {
   if (!CH || CH.for !== SEL) await loadChanges(true, userAsked);
   else if (wantChanges && changed) await loadChanges(true, false);
   if (changed || userAsked) { if (wantChanges) renderChanges(); else renderBar(); }
-  // A session that exists should be on screen, including on the very first paint.
-  if (!ACTIVE) showWork();
+  // A session that exists should be on screen, including on the very first paint. A
+  // poll never starts one: that's a click's decision, not a timer's.
+  if (!ACTIVE) showWork(false);
   if (userAsked) loading(false);
 }
 
@@ -521,7 +522,7 @@ function strip(w, tone) {
     SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
     renderWork();
     setSurface("session");
-    showWork();                  // its session, not an empty pane
+    showWork(true);              // its session, not an empty pane
     loadChanges(true);
   };
   return row;
@@ -534,14 +535,31 @@ const selected = () => WORK.find(w => w.path === SEL) || null;
 // exactly one — which is never the answer you wanted.
 function sessionFor(path) {
   const mine = SESSIONS.filter(s => s.cwd === path && s.alive);
-  return mine.find(s => s.kind === "attach") || mine[0] || null;
+  // The agent first, then the newest thing you opened — ids ascend, so that's the last.
+  return mine.find(s => s.kind === "attach") ||
+         mine.slice().sort((a, b) => cmpId(b.id, a.id))[0] || null;
 }
 
-// Show that session, or clear the pane if there is nothing to show.
-function showWork() {
+// s2 vs s10: compare the number, not the string.
+function cmpId(a, b) {
+  const n = (x) => parseInt(String(x).replace(/\D/g, ""), 10) || 0;
+  return n(a) - n(b);
+}
+
+// Show that session. With nothing open but an agent living there, resume it rather
+// than showing a chooser — that's the session for this piece of work.
+let AUTO = null;                       // don't try to auto-start the same work twice
+function showWork(mayStart) {
   const s = sessionFor(SEL);
-  if (s && s.id !== ACTIVE) { open(s.id); return; }
-  if (!s) { ACTIVE = null; renderBar(); }
+  if (s) { if (s.id !== ACTIVE) open(s.id); return; }
+  ACTIVE = null;
+  renderBar();
+  const w = selected();
+  const caps = (STATE && STATE.agent) || {};
+  if (mayStart && w && w.agents && w.agents.length && caps.attach && AUTO !== SEL) {
+    AUTO = SEL;
+    start("resume");
+  }
 }
 
 // ---- sessions ----
@@ -905,9 +923,17 @@ function connect(id, pane) {
     `${proto}//${location.host}/api/session/socket/${id}?cols=${cols}&rows=${rows}`);
   ws.binaryType = "arraybuffer";
   pane.ws = ws;
-  // The server replays the scrollback on attach, so clear first or a reconnect
-  // paints everything twice.
-  ws.onopen = () => pane.term.reset();
+  ws.onopen = () => {
+    // The server replays the scrollback on attach, so clear first or a reconnect
+    // paints everything twice.
+    pane.term.reset();
+    // Then fit and *say so*. The size in the URL above is whatever xterm defaulted to
+    // before layout — 80×24 — and the fit that follows fires onResize while the socket
+    // is still CONNECTING, so that message was dropped and the program kept drawing
+    // into a corner until something else (changing the font) resized it again.
+    try { pane.fit.fit(); } catch {}
+    send(pane, JSON.stringify({ t: "size", cols: pane.term.cols, rows: pane.term.rows }));
+  };
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") {
       let msg = {};
@@ -936,8 +962,11 @@ function connect(id, pane) {
 // A terminal can't carry an image, but an agent takes a *path* — so a pasted
 // screenshot is uploaded and its path typed in for you. "Here's what it looks like,
 // fix it" is half of working with an agent, and it was simply impossible before.
+// Preference order for the same picture in several formats.
+const IMAGE_RANK = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
 async function pasteImages(items, insert) {
-  const files = [];
+  let files = [];
   for (const item of items || []) {
     if (item.kind === "file" && (item.type || "").startsWith("image/")) {
       const f = item.getAsFile();
@@ -945,6 +974,16 @@ async function pasteImages(items, insert) {
     }
   }
   if (!files.length) return false;
+  // A macOS screenshot arrives as the same image in two formats — png and tiff — and
+  // uploading both is why one paste produced two attachments. Several *types* means one
+  // picture described several ways: keep the best. Several files of the same type is a
+  // genuine multi-image paste, so keep those.
+  const types = new Set(files.map(f => f.type));
+  if (types.size > 1) {
+    const rank = (t) => { const i = IMAGE_RANK.indexOf(t); return i < 0 ? IMAGE_RANK.length : i; };
+    const best = files.slice().sort((a, b) => rank(a.type) - rank(b.type))[0].type;
+    files = files.filter(f => f.type === best);
+  }
   for (const f of files) {
     let r;
     try {
