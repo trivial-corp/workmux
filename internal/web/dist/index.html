@@ -1366,24 +1366,10 @@ function mouseReport(pane, btn, c, press) {
   return "\x1b[M" + String.fromCharCode(32 + (press ? btn : 3), 32 + c.col, 32 + c.row);
 }
 
-// Shift is the way out, as it is in every terminal: it always means "this one is mine,
-// don't give it to the program", which is what leaves selection possible at all while
-// an agent is holding the mouse.
+// Shift is the way out, as it is in every terminal: it means "this one is mine, don't
+// give it to the program", so a shift-wheel scrolls the terminal's own scrollback even
+// while a program is holding the mouse.
 const mouseIsOurs = (pane, e) => !pane || !tracking(pane) || e.shiftKey;
-
-function reportButton(e, press) {
-  const pane = paneAt(e);
-  if (mouseIsOurs(pane, e)) return;
-  const c = cellAt(pane, e);
-  if (!c) return;
-  const btn = (e.button === 1 ? 1 : e.button === 2 ? 2 : 0) + mouseMods(e);
-  const seq = mouseReport(pane, btn, c, press);
-  if (seq) send(pane, new TextEncoder().encode(seq));
-  // Stop here: the terminal's own selection would otherwise start on the same press
-  // the program is being told about, and you'd be doing two things with one click.
-  e.preventDefault();
-  e.stopPropagation();
-}
 
 // The vendor opens a link only on ⌘-click. In a browser a link is a link — and it opens
 // in a new tab, because navigating this one away would take the dashboard and every
@@ -1404,31 +1390,18 @@ async function openLinkAt(pane, e) {
   return true;
 }
 
-// One set of listeners for every pane, on the container: the terminal registers its own
-// in the capture phase on the pane itself, and a parent's capture runs first, which is
-// the only place these can win from.
+// The wheel goes to the program; the buttons stay here.
+//
+// Both were forwarded at first, which is what a terminal does. But a click reported to a
+// coding agent made its transcript go blank while the prompt stayed — it does not expect
+// button reports, only the wheel it turned tracking on for — and a click that can wipe
+// what you were reading is a bad trade for clicks inside a program that has no use for
+// them. So a click is ours: it opens a link, or it starts a selection. The wheel, which
+// is the thing that was actually broken, is still the program's.
 function wireMouse() {
-  const box = $("term");
-  box.addEventListener("mousedown", (e) => reportButton(e, true), true);
-  box.addEventListener("mouseup", (e) => reportButton(e, false), true);
-  box.addEventListener("mousemove", (e) => {
+  $("term").addEventListener("click", (e) => {
     const pane = paneAt(e);
-    if (mouseIsOurs(pane, e)) return;
-    // 1002 is "while a button is down", 1003 is "always". Neither wants a report per
-    // pixel: the program is drawing cells, so it hears about the mouse when it changes
-    // cell.
-    const track = tracking(pane);
-    if (track === 1002 ? !e.buttons : track !== 1003) return;
-    const c = cellAt(pane, e);
-    if (!c || (pane.at && pane.at.col === c.col && pane.at.row === c.row)) return;
-    pane.at = c;
-    const held = e.buttons & 2 ? 2 : e.buttons & 4 ? 1 : e.buttons ? 0 : 3;
-    const seq = mouseReport(pane, held + 32 + mouseMods(e), c, true);
-    if (seq) send(pane, new TextEncoder().encode(seq));
-  }, true);
-  box.addEventListener("click", (e) => {
-    const pane = paneAt(e);
-    if (!pane || tracking(pane) || e.shiftKey) return;   // the program's click, or a selection
+    if (!pane || e.shiftKey) return;   // a selection, not a click
     void openLinkAt(pane, e);
   }, true);
 }
@@ -1673,7 +1646,7 @@ const KEYS = [["esc", "\x1b"], ["tab", "\t"], ["⌃C", "\x03"], ["⌃D", "\x04"]
               ["←", "\x1b[D"], ["→", "\x1b[C"], ["⏎", "\r"]];
 // A chord nobody knows about may as well not exist, so the pane says what it has.
 const CHORD_HELP = "⌘⏎ newline · ⇧⏎ newline · ⌘←/→ line start/end · ⌥←/→ by word · " +
-                   "⌘⌫ kill line · ⇧⇥ back-tab · ⇧drag to select · paste an image to send its path";
+                   "⌘⌫ kill line · ⇧⇥ back-tab · paste an image to send its path";
 function renderKeys() {
   const box = $("keys");
   box.textContent = "";
@@ -2490,8 +2463,8 @@ function renderKeysSheet() {
     ["/", "Filter the work list"],
     ["Esc", "Close this"],
     ["⌃C / ⌃D", "Interrupt, end of input — sent to the program, not the browser"],
-    ["⇧ drag", "Select text while a program is holding the mouse"],
-    ["Click a link", "Opens in a new tab. A program that wants clicks gets them instead"],
+    ["⇧ wheel", "Scroll this terminal's own scrollback, not the program's"],
+    ["Click a link", "Opens it in a new tab"],
     ["Paste an image", "Goes to the agent through your clipboard"],
   ];
   for (const [k, what] of rows) {
