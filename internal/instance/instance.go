@@ -1,4 +1,5 @@
-// Package instance is how a second workmux finds the first.
+// Package instance is what workmux knows between runs: where a server is
+// listening, and which repositories it was serving.
 //
 // The tool is used from wherever you happen to be standing: you're in a repo, you
 // run workmux. Doing that in a second repo used to give you a second server, a
@@ -10,6 +11,10 @@
 // Deliberately a file and an HTTP call, not a socket protocol: the endpoint it
 // posts to is the same one the browser uses, so there is one way to add a project
 // and not two.
+//
+// The remembered project list is here for the same reason the address is: a set of
+// repositories you assembled over a week shouldn't evaporate because the process
+// restarted. `workmux` on its own picks up where you left off.
 package instance
 
 import (
@@ -32,7 +37,14 @@ type Info struct {
 
 // Path is where the note lives: XDG state, because this is a fact about a running
 // process rather than configuration, and it is expected to be deleted.
-func Path() string {
+func Path() string { return statePath("server.json") }
+
+// ProjectsPath is where the remembered repositories live. Beside the address, and
+// deletable in the same breath: rm -r ~/.local/state/workmux forgets everything
+// workmux knows about you.
+func ProjectsPath() string { return statePath("projects.json") }
+
+func statePath(name string) string {
 	dir := os.Getenv("XDG_STATE_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -41,7 +53,47 @@ func Path() string {
 		}
 		dir = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(dir, "workmux", "server.json")
+	return filepath.Join(dir, "workmux", name)
+}
+
+// SaveProjects records the repositories being served, so the next bare `workmux`
+// serves them again. Written on every change rather than at exit: a server that is
+// killed, or that dies, must not take the list with it.
+func SaveProjects(roots []string) error {
+	path := ProjectsPath()
+	if path == "" {
+		return fmt.Errorf("no home directory to write state to")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	body, err := json.Marshal(struct {
+		Roots []string `json:"roots"`
+	}{roots})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, body, 0o600)
+}
+
+// LoadProjects is the set the last server was serving. Missing is the first-run
+// case and not an error.
+func LoadProjects() []string {
+	path := ProjectsPath()
+	if path == "" {
+		return nil
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out struct {
+		Roots []string `json:"roots"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return nil
+	}
+	return out.Roots
 }
 
 // Save records this server. Failure is ignored by callers: not being findable is a

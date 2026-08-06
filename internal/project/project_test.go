@@ -142,3 +142,50 @@ func TestSlug(t *testing.T) {
 		}
 	}
 }
+
+// The set has to be writable-down as it changes, or a restart forgets everything
+// you added through the UI.
+func TestOnChangeReportsTheWholeSet(t *testing.T) {
+	a := testrepo.New(t, "alpha")
+	b := testrepo.New(t, "beta")
+
+	var seen [][]string
+	set, err := New([]string{a.Root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set.OnChange = func(roots []string) { seen = append(seen, roots) }
+
+	if _, err := set.Add(b.Root); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || len(seen[0]) != 2 {
+		t.Fatalf("after add, OnChange saw %v", seen)
+	}
+	if seen[0][0] != a.Root || seen[0][1] != b.Root {
+		t.Errorf("roots = %v, want them in order", seen[0])
+	}
+
+	if _, err := set.Remove("beta"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || len(seen[1]) != 1 || seen[1][0] != a.Root {
+		t.Errorf("after remove, OnChange saw %v", seen)
+	}
+
+	// Adding one that's already there changed nothing, so there is nothing to say.
+	if _, err := set.Add(a.Root); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 {
+		t.Errorf("a no-op add reported a change: %v", seen)
+	}
+
+	// And a refused removal must not either.
+	if _, err := set.Remove("alpha"); err == nil {
+		t.Fatal("the last project should not be removable")
+	}
+	if len(seen) != 2 {
+		t.Errorf("a refused removal reported a change: %v", seen)
+	}
+}

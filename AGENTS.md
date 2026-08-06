@@ -138,7 +138,15 @@ thing that fails on a busy port is `--standalone`, which asked for the port.
 The set is therefore mutable while the server runs, which is why `project.Set`
 locks and why `List` hands back a copy: a poll must never see it half-changed. A
 project that arrives over HTTP has to come out identical to one that was there at
-startup — `Set.OnAdd` is what finishes the wiring the process does itself.
+startup — `Set.OnAdd` is what finishes the wiring the process does itself, and
+`Set.OnChange` reports the whole set so it can be written down.
+
+It is also remembered between runs, in `projects.json` beside the server address.
+`workmux` with nothing named serves the last set plus wherever you are standing;
+naming roots replaces it. Two rules keep that from becoming a trap: a root you
+typed must be a repository (a typo is worth stopping for), and a remembered one
+that no longer is gets dropped with a note (a directory you deleted last month is
+not a reason the server won't start).
 
 The work list is merged across projects and ordered as one list, because "what
 wants me right now" doesn't stop at a repository boundary. Every `work.Item`

@@ -148,6 +148,10 @@ type Set struct {
 	// after startup, and it must come out identical to one that was there from the
 	// beginning.
 	OnAdd func(*Project)
+	// OnChange is told the whole set whenever it gains or loses a project, so it
+	// can be written down. Called with the roots rather than the projects: what
+	// survives a restart is a list of directories, not live readers.
+	OnChange func(roots []string)
 }
 
 // New opens every root. One bad root fails the whole set: a dashboard silently
@@ -208,7 +212,27 @@ func (s *Set) Add(root string) (*Project, error) {
 	if onAdd != nil {
 		onAdd(p)
 	}
+	s.changed()
 	return p, nil
+}
+
+// Roots is every repository being served, in order — the form that outlives the
+// process.
+func (s *Set) Roots() []string {
+	out := []string{}
+	for _, p := range s.List() {
+		out = append(out, p.Cfg.Root)
+	}
+	return out
+}
+
+func (s *Set) changed() {
+	s.mu.RLock()
+	fn := s.OnChange
+	s.mu.RUnlock()
+	if fn != nil {
+		fn(s.Roots())
+	}
 }
 
 func (s *Set) note(format string, args ...any) {
@@ -224,12 +248,13 @@ func (s *Set) note(format string, args ...any) {
 // it is a page that can only tell you it is empty.
 func (s *Set) Remove(id string) (*Project, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	p, ok := s.byID[id]
 	if !ok {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("no project %q is being served", id)
 	}
 	if len(s.list) == 1 {
+		s.mu.Unlock()
 		return nil, errors.New("this is the only project — stop the server instead")
 	}
 	delete(s.byID, id)
@@ -240,6 +265,10 @@ func (s *Set) Remove(id string) (*Project, error) {
 		}
 	}
 	s.list = out
+	s.mu.Unlock()
+
+	// Outside the lock, like OnAdd: changed() reads the set back to report it.
+	s.changed()
 	return p, nil
 }
 

@@ -156,6 +156,12 @@ cd ~/code/trip1   && workmux      # starts a server on 4315
 cd ~/code/homelab && workmux      # joins it — same page, same port
 ```
 
+And then, tomorrow, from anywhere:
+
+```
+workmux                           # both of them again
+```
+
 The second invocation finds the first, hands over the repository it was started in,
 and exits. Nothing to configure, no second port to remember, no second tab. Or name
 them all up front:
@@ -178,6 +184,27 @@ those at its repo, so switching is something you do by clicking the work you mea
 The header menu also adds a repository by path and stops serving one. Stopping
 closes that project's sessions — a shell in a worktree the server no longer holds is
 a process nothing has a route to — and it says how many before it does it.
+
+### It remembers
+
+The set of repositories is written down as it changes, so it survives a restart, a
+reboot and a `kill -9`. `workmux` with nothing named serves what the last server was
+serving, plus wherever you're standing if that's a repository — which is how the set
+grows: you run it in a new repo once, and it's there from then on.
+
+Naming roots replaces the set, because then you've said what you want:
+
+```
+workmux ~/code/trip1              # just trip1, from now on
+```
+
+Dropping one through the header menu forgets it too. A remembered repository that
+has been moved or deleted is dropped with a note on startup, rather than being a
+reason not to start. The list lives in
+`$XDG_STATE_HOME/workmux/projects.json` — `rm -r ~/.local/state/workmux` forgets
+everything workmux knows about you.
+
+`--standalone` neither reads nor writes it: it serves exactly what you named.
 
 How the second invocation finds the first: a running server writes its URL to
 `$XDG_STATE_HOME/workmux/server.json` (`~/.local/state/workmux/server.json`), and a

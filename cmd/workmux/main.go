@@ -97,15 +97,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	roots := resolveRoots(opts.roots)
-	for _, root := range roots {
-		if !gitx.IsRepo(root) {
-			fmt.Fprintf(os.Stderr, "workmux: %s is not a git repository.\n"+
-				"The unit of work here is a worktree, so it needs one — run it inside "+
-				"your project, or pass --root DIR.\n", root)
-			os.Exit(1)
-		}
-	}
+	// What this invocation is about: the repositories you named, or the one you're
+	// standing in. This is what gets handed over when a server is already up —
+	// never the remembered set, which that server already has.
+	mine := namedRoots(opts)
 
 	// Somebody else may already be serving. Hand them these repositories and stop:
 	// one page with everything on it is the whole point, and two servers can't do
@@ -118,10 +113,13 @@ func main() {
 	// dead end. --standalone is how you ask for a server of your own.
 	if !opts.standalone {
 		if url, ok := runningServer(opts); ok {
-			join(url, roots, opts.open, ignoredByJoining(opts))
+			join(url, mine, opts.open, ignoredByJoining(opts))
 			return
 		}
 	}
+
+	// Starting one, so bring back what the last server was serving.
+	roots := startingRoots(opts, mine)
 
 	projects, err := project.New(roots)
 	if err != nil {
@@ -129,6 +127,12 @@ func main() {
 		os.Exit(1)
 	}
 	projects.Log = web.Journal.Note
+	// Write the set down whenever it changes, so the next bare `workmux` brings it
+	// back. A standalone server is a deliberate one-off and doesn't get a vote.
+	if !opts.standalone {
+		projects.OnChange = func(roots []string) { _ = instance.SaveProjects(roots) }
+		_ = instance.SaveProjects(projects.Roots())
+	}
 
 	// git is required; docker only matters when something has a stack, and demanding
 	// it otherwise turned "this project has no containers" into "won't start".
@@ -330,6 +334,75 @@ func main() {
 	}
 }
 
+// namedRoots is the repositories this invocation is about: the ones you named, or
+// the one you're standing in when you named none.
+//
+// A root you typed had better be one — a typo is worth stopping for. Standing
+// somewhere that isn't a repository is not an error here, because `workmux` from
+// your home directory is a reasonable way to bring back what you had.
+func namedRoots(opts options) []string {
+	roots := resolveRoots(opts.roots)
+	if len(opts.roots) > 0 {
+		for _, root := range roots {
+			if !gitx.IsRepo(root) {
+				fmt.Fprintf(os.Stderr, "workmux: %s is not a git repository.\n"+
+					"The unit of work here is a worktree, so it needs one — run it inside "+
+					"your project, or pass --root DIR.\n", root)
+				os.Exit(1)
+			}
+		}
+		return roots
+	}
+	if len(roots) == 1 && !gitx.IsRepo(roots[0]) {
+		return nil
+	}
+	return roots
+}
+
+// startingRoots is what a server this process starts should serve: what you named,
+// plus what the last server was serving.
+//
+// Remembering is the difference between "run workmux in each of your repos again,
+// every morning" and "run workmux". A set you assembled over a week shouldn't
+// evaporate because a laptop rebooted. Naming roots replaces it, because then you
+// have said what you want; naming none restores it and adds wherever you're
+// standing, which is how it grew in the first place.
+func startingRoots(opts options, mine []string) []string {
+	roots := mine
+	if len(opts.roots) == 0 && !opts.standalone {
+		roots = nil
+		seen := map[string]bool{}
+		for _, root := range append(remembered(), mine...) {
+			if !seen[root] {
+				seen[root] = true
+				roots = append(roots, root)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		fmt.Fprint(os.Stderr, "workmux: nothing to serve.\n"+
+			"The unit of work here is a worktree, so it needs a repository — run it "+
+			"inside one, or pass --root DIR.\n")
+		os.Exit(1)
+	}
+	return roots
+}
+
+// remembered is the last server's project list, minus the repositories that have
+// since been moved or deleted. Dropping them quietly is the point: the alternative
+// is a server that won't start because of a directory you removed last month.
+func remembered() []string {
+	var out []string
+	for _, root := range instance.LoadProjects() {
+		if gitx.IsRepo(root) {
+			out = append(out, root)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "  \033[2mforgetting %s — no longer a git repository\033[0m\n", root)
+	}
+	return out
+}
+
 // resolveRoots turns what was on the command line into repository roots.
 func resolveRoots(given []string) []string {
 	if len(given) == 0 {
@@ -412,6 +485,16 @@ func ignoredByJoining(o options) []string {
 // happened, and leaves.
 func join(url string, roots []string, open bool, ignored []string) {
 	fmt.Fprintf(os.Stderr, "\n  \033[1mworkmux\033[0m — already running at \033[36m%s\033[0m\n", url)
+	if len(roots) == 0 {
+		// Run from somewhere that isn't a repository. Nothing to hand over, and the
+		// address is the answer to the question that was actually being asked.
+		fmt.Fprint(os.Stderr, "  \033[2mnothing here to add — run it inside a repository "+
+			"to put that one on the page.\033[0m\n\n")
+		if open {
+			openBrowser(url)
+		}
+		return
+	}
 	failed := false
 	for _, root := range roots {
 		res, err := instance.Join(url, root)
