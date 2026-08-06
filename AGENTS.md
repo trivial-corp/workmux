@@ -53,6 +53,7 @@ subprocess with its exit code, which is where a wrong answer always comes from.
 
 ```
 make dev ROOT=~/path/to/some-repo    # go run, frontend from disk, subprocesses logged
+                                     # :4316, and never joins the workmux you use
 make test                            # go test ./...
 make lint                            # gofmt -l must be empty, then go vet
 ```

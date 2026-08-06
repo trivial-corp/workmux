@@ -183,7 +183,10 @@ How the second invocation finds the first: a running server writes its URL to
 `$XDG_STATE_HOME/workmux/server.json` (`~/.local/state/workmux/server.json`), and a
 later one reads it, checks a workmux is actually answering there, and posts to
 `/api/projects`. Pass `--standalone` to skip that and get a server of your own; it also doesn't
-become the one later invocations look for first.
+become the one later invocations look for first. `--dev`, `--token` and
+`--no-terminal` imply it, because each describes a server *this* process would be
+and none of them can be honoured by joining one that is already up — a flag that
+quietly does nothing is worse than a flag that refuses.
 
 ```
 workmux --standalone --port 4316 --root ~/code/scratch
@@ -386,8 +389,13 @@ per-worktree stacks:
 **Run it from source, against any project. No build, no install, no CI:**
 
 ```
-make dev ROOT=~/code/some-project            # add PORT=4321 to sit beside another instance
+make dev ROOT=~/code/some-project            # :4316, beside the workmux you actually use
 ```
+
+`--dev` is always its own server: it never joins a running one and never becomes
+the one others join. A dev build serving the workmux you work in would be the same
+mistake twice — its frontend comes off disk and its code is whatever you're
+mid-edit on. It defaults to 4316 for the same reason; `PORT=` moves it.
 
 Against a monorepo with a stack and 40-odd worktrees, that looks like:
 

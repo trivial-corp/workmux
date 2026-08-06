@@ -54,12 +54,14 @@ server — both projects, one page, one port.
                      the options, to serve several (default: this directory)
       --standalone   start a server of my own instead of joining one that is
                      already running. It also doesn't become the server later
-                     invocations look for first
+                     invocations look for first. Implied by --dev, --token and
+                     --no-terminal, which describe a server this one would be
       --no-terminal  dashboard only — don't serve shells
       --open         open a browser once it's listening
       --dev [DIR]    serve the frontend from disk (default internal/web/dist)
                      instead of the copy baked into the binary, and log as if
-                     --verbose. Editing the UI becomes a refresh.
+                     --verbose. Editing the UI becomes a refresh. Always its own
+                     server: it never joins one, and none join it
       --verbose      log every request, every subprocess and what it returned
   -h, --help         this
   -V, --version      print the version
@@ -109,11 +111,25 @@ func main() {
 	// Somebody else may already be serving. Hand them these repositories and stop:
 	// one page with everything on it is the whole point, and two servers can't do
 	// that however many tabs you open.
-	if !opts.standalone {
+	//
+	// Unless this invocation asked for a server of its own — see ownServerFlag. That
+	// distinction was missing and `make dev` paid for it: --dev joined the workmux
+	// already running, so it served that binary's embedded frontend and the flag did
+	// nothing at all, silently.
+	own := ownServerFlag(opts)
+	if !opts.standalone && own == "" {
 		if url, ok := runningServer(opts); ok {
 			join(url, roots, opts.open)
 			return
 		}
+	}
+	if own != "" && instance.Running(boundAt(opts)) {
+		// It would fail on bind a moment from now with "address already in use",
+		// which doesn't mention the thing that's actually in the way.
+		fmt.Fprintf(os.Stderr, "workmux: a workmux is already running at %s, and %s "+
+			"needs a server of its own.\nGive this one another port: --port %d\n",
+			boundAt(opts), own, opts.port+1)
+		os.Exit(1)
 	}
 
 	projects, err := project.New(roots)
@@ -248,7 +264,7 @@ func main() {
 	for _, p := range projects.List() {
 		fmt.Fprintf(os.Stderr, "  \033[2m%-12s\033[0m %s\n", p.ID, p.Root())
 	}
-	if !opts.standalone {
+	if !opts.standalone && !opts.devSet {
 		fmt.Fprint(os.Stderr, "  \033[2mrun workmux in another repo to add it here\033[0m\n")
 	}
 	fmt.Fprint(os.Stderr, "  Ctrl-C to stop.\n\n")
@@ -294,7 +310,7 @@ func main() {
 	// everything else joins. (It can still be found by a later invocation aiming
 	// at the port it happens to be on — one server per port is the rule, and this
 	// flag is about which one this process becomes, not about hiding.)
-	if !opts.standalone {
+	if !opts.standalone && !opts.devSet {
 		if err := instance.Save(where); err != nil && (opts.verbose || opts.devSet) {
 			log.Printf("could not record this server's address: %v", err)
 		}
@@ -348,14 +364,40 @@ func resolveRoots(given []string) []string {
 // the default port is the fallback for when that note has been lost.
 func runningServer(opts options) (string, bool) {
 	if flagGiven("port") || flagGiven("host") {
-		url := fmt.Sprintf("http://%s:%d", displayHost(opts.host), opts.port)
-		return url, instance.Running(url)
+		return boundAt(opts), instance.Running(boundAt(opts))
 	}
 	if info, ok := instance.Load(); ok && instance.Running(info.URL) {
 		return info.URL, true
 	}
-	url := fmt.Sprintf("http://%s:%d", displayHost(opts.host), opts.port)
-	return url, instance.Running(url)
+	return boundAt(opts), instance.Running(boundAt(opts))
+}
+
+// boundAt is the address this invocation would listen on, as a client would reach it.
+func boundAt(o options) string {
+	return fmt.Sprintf("http://%s:%d", displayHost(o.host), o.port)
+}
+
+// ownServerFlag names the flag that makes this invocation a server rather than a
+// client, or "" when it is free to join one.
+//
+// Joining is what happens when you didn't ask for a server. These three describe a
+// server this process would *be* — a frontend read off disk, terminals off, a
+// pinned token — and none of them can be honoured by handing a repository to a
+// server that is already up. Silently joining would give you something that looks
+// like it worked and isn't what you asked for.
+//
+// The environment doesn't count, only the flag: WORKMUX_TERMINAL=0 set once in a
+// shell profile shouldn't quietly turn every invocation into its own server.
+func ownServerFlag(o options) string {
+	switch {
+	case o.devSet:
+		return "--dev"
+	case flagGiven("no-terminal"):
+		return "--no-terminal"
+	case o.tokenSet:
+		return "--token"
+	}
+	return ""
 }
 
 // join hands these repositories to the server that is already running, says what
@@ -492,7 +534,7 @@ func parseArgs(argv []string) (options, error) {
 			fmt.Printf("workmux %s\n", version)
 			os.Exit(0)
 		case "--no-terminal":
-			o.noTerm = true
+			o.noTerm, given["no-terminal"] = true, true
 		case "--open":
 			o.open = true
 		case "--standalone":

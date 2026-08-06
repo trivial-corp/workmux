@@ -185,3 +185,55 @@ func has(list []string, want string) bool {
 	}
 	return false
 }
+
+// A flag that describes the server this process would be means "start one".
+//
+// This was a real bug: `make dev` handed its repository to the workmux already
+// running, which then served its own embedded frontend — so --dev did nothing at
+// all, and said nothing about it. Joining is only correct when the invocation
+// asked for nothing a running server can't already give it.
+func TestFlagsThatMeanStartAServer(t *testing.T) {
+	for _, tc := range []struct {
+		argv []string
+		want string
+	}{
+		{[]string{"--dev"}, "--dev"},
+		{[]string{"--dev=some/dir"}, "--dev"},
+		{[]string{"--no-terminal"}, "--no-terminal"},
+		{[]string{"--token", "abc"}, "--token"},
+		{[]string{"--token", ""}, "--token"}, // an empty token is still a decision
+		{[]string{}, ""},
+		{[]string{"--open"}, ""},
+		{[]string{"--port", "4400"}, ""}, // where, not what: joining one there is right
+		{[]string{"--host", "0.0.0.0"}, ""},
+		{[]string{"--root", "/tmp/x"}, ""},
+	} {
+		reset()
+		o, err := parseArgs(tc.argv)
+		if err != nil {
+			t.Fatalf("%v: %v", tc.argv, err)
+		}
+		if got := ownServerFlag(o); got != tc.want {
+			t.Errorf("ownServerFlag(%v) = %q, want %q", tc.argv, got, tc.want)
+		}
+	}
+}
+
+// The environment must not turn every invocation into its own server. Someone with
+// WORKMUX_TERMINAL=0 in a shell profile would otherwise get a server per repository
+// — the exact thing this is all meant to stop.
+func TestTheEnvironmentDoesNotForceAServer(t *testing.T) {
+	reset()
+	defer reset()
+	os.Setenv("WORKMUX_TERMINAL", "0")
+	o, err := parseArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.noTerm {
+		t.Fatal("WORKMUX_TERMINAL=0 should still turn terminals off")
+	}
+	if got := ownServerFlag(o); got != "" {
+		t.Errorf("ownServerFlag = %q, want it to stay free to join", got)
+	}
+}
