@@ -142,11 +142,15 @@ startup — `Set.OnAdd` is what finishes the wiring the process does itself, and
 `Set.OnChange` reports the whole set so it can be written down.
 
 It is also remembered between runs, in `projects.json` beside the server address.
-`workmux` with nothing named serves the last set plus wherever you are standing;
-naming roots replaces it. Two rules keep that from becoming a trap: a root you
-typed must be a repository (a typo is worth stopping for), and a remembered one
-that no longer is gets dropped with a note (a directory you deleted last month is
-not a reason the server won't start).
+A server serves the remembered set plus whatever this invocation named. Naming
+adds, never replaces — that distinction was the other way round for one commit and
+`make dev ROOT=x`, which always passes `--root`, deleted the rest of the list.
+Removing a project is the only thing that forgets one.
+
+Two rules keep it from becoming a trap: a root you typed must be a repository (a
+typo is worth stopping for), and a remembered one that no longer is gets dropped
+with a note (a directory you deleted last month is not a reason the server won't
+start).
 
 The work list is merged across projects and ordered as one list, because "what
 wants me right now" doesn't stop at a repository boundary. Every `work.Item`

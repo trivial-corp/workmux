@@ -359,17 +359,20 @@ func namedRoots(opts options) []string {
 	return roots
 }
 
-// startingRoots is what a server this process starts should serve: what you named,
-// plus what the last server was serving.
+// startingRoots is what a server this process starts should serve: everything the
+// last one was serving, plus whatever this invocation is about.
 //
-// Remembering is the difference between "run workmux in each of your repos again,
-// every morning" and "run workmux". A set you assembled over a week shouldn't
-// evaporate because a laptop rebooted. Naming roots replaces it, because then you
-// have said what you want; naming none restores it and adds wherever you're
-// standing, which is how it grew in the first place.
+// Naming roots adds to that set; it does not replace it. It did briefly, on the
+// reasoning that naming them says what you want — and then `make dev ROOT=x`, which
+// always passes --root, quietly deleted every other repository from the list. A
+// command that is about one repository must not be able to forget the others.
+// Forgetting has one route, and it's the one that says so: removing a project.
+//
+// --standalone is the exception, as everywhere: it serves exactly what it was
+// given and neither reads the list nor writes it.
 func startingRoots(opts options, mine []string) []string {
 	roots := mine
-	if len(opts.roots) == 0 && !opts.standalone {
+	if !opts.standalone {
 		roots = nil
 		seen := map[string]bool{}
 		for _, root := range append(remembered(), mine...) {

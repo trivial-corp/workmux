@@ -192,13 +192,13 @@ reboot and a `kill -9`. `workmux` with nothing named serves what the last server
 serving, plus wherever you're standing if that's a repository — which is how the set
 grows: you run it in a new repo once, and it's there from then on.
 
-Naming roots replaces the set, because then you've said what you want:
+Naming roots **adds** to the set — `workmux ~/code/newthing` serves that one too,
+alongside everything you already had. Nothing on a command line removes a
+repository, because a command about one repo must not be able to forget the
+others: `make dev ROOT=x` passes `--root`, and it would have.
 
-```
-workmux ~/code/trip1              # just trip1, from now on
-```
-
-Dropping one through the header menu forgets it too. A remembered repository that
+Forgetting has one route, the one that says so: **Stop serving** in the header
+menu. A remembered repository that
 has been moved or deleted is dropped with a note on startup, rather than being a
 reason not to start. The list lives in
 `$XDG_STATE_HOME/workmux/projects.json` — `rm -r ~/.local/state/workmux` forgets

@@ -3,6 +3,9 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/trivial-corp/workmux/internal/instance"
+	"github.com/trivial-corp/workmux/internal/testrepo"
 )
 
 func reset() {
@@ -241,5 +244,42 @@ func TestTheEnvironmentIsNotAFlag(t *testing.T) {
 	}
 	if got := ignoredByJoining(o); len(got) != 0 {
 		t.Errorf("ignoredByJoining = %v, want nothing to warn about", got)
+	}
+}
+
+// Naming a root adds to the remembered set. It replaced it for one commit, and
+// `make dev ROOT=x` — which always passes --root — silently deleted every other
+// repository from the list.
+func TestNamingARootDoesNotForgetTheRest(t *testing.T) {
+	reset()
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	kept := testrepo.New(t, "kept").Root
+	named := testrepo.New(t, "named").Root
+	if err := instance.SaveProjects([]string{kept}); err != nil {
+		t.Fatal(err)
+	}
+
+	o, err := parseArgs([]string{"--root", named})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := startingRoots(o, namedRoots(o))
+	if len(got) != 2 || got[0] != kept || got[1] != named {
+		t.Fatalf("startingRoots = %v, want [%s %s]", got, kept, named)
+	}
+
+	// --standalone is the way to say "only this", and it leaves the list alone.
+	reset()
+	o, err = parseArgs([]string{"--standalone", "--root", named})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got = startingRoots(o, namedRoots(o)); len(got) != 1 || got[0] != named {
+		t.Errorf("standalone = %v, want just %s", got, named)
+	}
+	if remembered := instance.LoadProjects(); len(remembered) != 1 || remembered[0] != kept {
+		t.Errorf("the remembered list changed: %v", remembered)
 	}
 }
