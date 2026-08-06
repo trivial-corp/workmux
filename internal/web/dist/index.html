@@ -128,6 +128,24 @@ main[data-surface="changes"] .pane { display:none; }
 .strip .seen { margin-left:auto; flex:0 0 auto; font-family:var(--mono); font-size:10px;
                color:var(--t3); white-space:nowrap; }
 .strip .seen.last { color:var(--wants); }
+.strip { position:relative; }
+/* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width box
+   floating above its own label. */
+.sbody label.check { display:flex; gap:9px; align-items:center; margin:2px 0;
+                     font-size:12.5px; color:var(--t2); cursor:pointer; }
+.sheet .check input { width:15px; height:15px; flex:0 0 auto; accent-color:var(--danger); }
+/* A button that destroys something says so before you hover it, unlike the ones that
+   merely stop a container. */
+.b.destroy { border-color:#5c2b2b; color:#ff9d9d; background:#1e1315; }
+.b.destroy:hover { border-color:#8a3a3a; color:#ffc2c2; background:#2a1618; }
+.strip .rowmenu { position:absolute; top:6px; right:4px; width:24px; height:22px; padding:0;
+                  border:0; border-radius:6px; background:none; color:var(--t3);
+                  font-size:13px; line-height:1; opacity:0; cursor:pointer; }
+.strip:hover .rowmenu, .strip .rowmenu:focus-visible, .strip[aria-selected="true"] .rowmenu {
+  opacity:1; }
+.strip .rowmenu:hover { background:var(--elev-2); color:var(--t1); }
+/* Reaching for it must not run into the timestamp underneath. */
+.strip:hover .seen, .strip[aria-selected="true"] .seen { padding-right:22px; }
 .strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--t1);
                  overflow-wrap:anywhere; min-width:0; }
 .strip[data-tone="base"] .branch { font-weight:400; color:var(--t2); }
@@ -718,6 +736,19 @@ function strip(w, tone) {
   if (chips.children.length) body.append(chips);
 
   row.append(body);
+  // Dropping is the one thing here that destroys something, so it lives behind a
+  // per-row menu rather than an X you can hit while reaching for the row. The main
+  // checkout has no menu at all: it is where the repository lives.
+  if (!w.is_default) {
+    const more = el("button", "rowmenu", "⋯");
+    more.title = "What to do with this work";
+    more.setAttribute("aria-label", "More");
+    more.onclick = (e) => {
+      e.stopPropagation();
+      menu(more, [{ label: "Drop this work…", danger: true, go: () => askDrop(w) }]);
+    };
+    row.append(more);
+  }
   row.onclick = () => {
     // No project switch needed: the current project follows the selection, so
     // clicking work in another repo simply aims the buttons at that repo.
@@ -818,11 +849,14 @@ async function refreshSessions(quiet) {
     const d = await (await fetch("/api/session/list")).json();
     list = d.sessions || [];
   } catch { list = []; answered = false; }   // --no-terminal: the route isn't there at all
-  if (answered) forgetVanished(list);
   const sig = JSON.stringify(list.map(s => [s.id, s.title, s.alive, s.cwd]));
   const changed = sig !== SESSIG;
   SESSIG = sig;
   SESSIONS = list;
+  // After SESSIONS, not before. Dropping a pane falls back to whatever else this work
+  // has, and asking that question against the previous answer picked the session that
+  // had just disappeared — which re-opened the pane it had this moment removed.
+  if (answered) forgetVanished(list);
   if (changed || !quiet) renderBar();
 }
 
@@ -1221,6 +1255,12 @@ async function open(id) {
     await VT_READY;
     pane.term.open(pane.wrap);
   }
+  // Everything that changes the height of the box goes before the fit. The toolbar
+  // and the key row are siblings of the terminal in a column, so drawing them after
+  // it moved the floor: the terminal was sized for a box 60px taller than the one it
+  // ended up in, and a pane whose rows don't match its box opens blank.
+  renderBar();
+  renderKeys();
   // Two frames: the wrapper has just become visible, and fitting against a box that
   // is still zero-sized is how a session ends up 80×24 inside a wide window.
   await twoFrames();
@@ -1230,8 +1270,6 @@ async function open(id) {
   // from that whether its buffer can be replayed into this terminal at all.
   if (!pane.ws || pane.ws.readyState > 1) connect(id, pane);
   focusPane(pane);
-  renderBar();
-  renderKeys();
 }
 
 const twoFrames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -1929,6 +1967,7 @@ function openSheet(which) {
   $("sheet").classList.add("on");
   $("sbody").className = "sbody";
   if (which === "new") renderNew();
+  if (which === "drop") renderDrop();
   if (which === "mcp") renderMcp(false);
   if (which === "log") renderLog();
   if (which === "stacks") renderStacks(false);
@@ -1939,6 +1978,92 @@ function closeSheet() {
   SHEET = null;
   $("scrim").classList.remove("on");
   $("sheet").classList.remove("on");
+}
+
+// Dropping a piece of work. The sheet is filled from the server's own check, so what
+// you are warned about is the same read the drop refuses on — a warning written into
+// the page would drift from the rule the moment either changed.
+let DROP = null;
+
+function askDrop(w) {
+  DROP = { work: w, check: null, branch: false };
+  openSheet("drop");
+}
+
+async function renderDrop() {
+  const w = DROP && DROP.work;
+  $("stitle").textContent = "Drop " + (w ? w.branch : "work");
+  const body = $("sbody"), foot = $("sfoot");
+  body.textContent = ""; foot.textContent = "";
+  if (!w) return;
+  if (!DROP.check) {
+    body.append(el("div", "hollow", el("p", null, "looking at what's there…")));
+    try {
+      DROP.check = await (await fetch(api("/drop/check?path=" + encodeURIComponent(w.path), w.project))).json();
+    } catch { DROP.check = { error: "could not read that worktree" }; }
+    if (SHEET !== "drop") return;
+    return renderDrop();
+  }
+  const c = DROP.check;
+  if (c.error) { body.append(el("div", "hollow", el("p", null, c.error))); return; }
+
+  const facts = el("dl", "facts");
+  const fact = (k, v) => { facts.append(el("dt", null, k), el("dd", null, v)); };
+  fact("branch", c.branch || "detached");
+  fact("path", w.path.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"));
+  if (c.dirty) fact("uncommitted", c.dirty + " file(s)");
+  if (c.ahead > 0) fact("unpushed", c.ahead + " commit(s)");
+  else if (!c.merged && c.ahead < 0) fact("unpushed", "can't tell — no fetched base to compare with");
+  if (c.sessions) fact("sessions", c.sessions + " open, which will be closed");
+  if (c.slot) fact("app", c.slot + ", which will be stopped");
+  body.append(el("div", "hollow",
+    el("p", null, "The worktree directory is deleted. Anything committed and pushed stays " +
+                  "in the repository; anything only here does not.")));
+  body.append(facts);
+
+  // Deleting the branch is a second, larger thing, so it is a second decision.
+  const keep = el("label", "check");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = DROP.branch;
+  box.onchange = () => { DROP.branch = box.checked; renderDrop(); };
+  keep.append(box, document.createTextNode(" also delete the branch " + (c.branch || "")));
+  body.append(keep);
+
+  const risky = c.dirty > 0 || (DROP.branch && !c.merged);
+  if (risky) {
+    body.append(el("div", "hollow", el("p", null,
+      c.dirty > 0
+        ? "There are uncommitted changes here. Dropping it anyway throws them away."
+        : "That branch isn't merged into " + (w.base || "its base") +
+          ". Dropping it anyway deletes those commits.")));
+  }
+
+  const go = el("button", "b destroy", risky ? "Drop it anyway" : "Drop it");
+  go.onclick = async () => {
+    go.disabled = true;
+    let r;
+    try {
+      r = await (await fetch(api("/drop", w.project), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: w.path, branch: DROP.branch, force: risky, slot: c.slot || "" }),
+      })).json();
+    } catch { r = { error: "server unreachable" }; }
+    if (r.error) { go.disabled = false; toast(r.error); return; }
+    // Everything pointed at a directory that no longer exists has to go with it.
+    for (const [id, pane] of [...PANES]) {
+      if (pane.cwd === w.path) { pane.exited = true; PANES.delete(id); pane.wrap.remove(); pane.term.dispose(); }
+    }
+    if (SEL === w.path) { SEL = null; ACTIVE = null; CHFILE = null; CHREV = null; }
+    delete SEEN[w.path];
+    delete LAST[w.path];
+    closeSheet();
+    toast("Dropped " + w.branch + (r.sessions ? " · " + r.sessions + " session(s) closed" : ""));
+    poll(true);
+  };
+  const cancel = el("button", "b", "Keep it");
+  cancel.onclick = closeSheet;
+  foot.append(cancel, go);
 }
 
 function renderNew() {

@@ -49,7 +49,13 @@ const known = new Set(["Terminal", "FitAddon", "TextEncoder", "TextDecoder", "We
 // literals containing comment markers.
 const code = script
   .replace(/\/\*[\s\S]*?\*\//g, "")
-  .split("\n").map((l) => l.replace(/(^|[^:\\])\/\/.*$/, "$1")).join("\n");
+  .split("\n").map((l) => l.replace(/(^|[^:\\])\/\/.*$/, "$1")).join("\n")
+  // Text is not code either. "3 file(s)" in a sentence read as a call to file(), which
+  // is a checker inventing a bug in a string it was never meant to look inside.
+  .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+  .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+  // A template's prose goes, but what is interpolated into it is code and stays.
+  .replace(/`(?:[^`\\]|\\.)*`/g, (t) => (t.match(/\$\{[\s\S]*?\}/g) || []).join(";"));
 
 const missing = new Map();
 for (const m of code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {

@@ -139,6 +139,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/p/{project}/stack", s.scoped(handleStack))
 	mux.HandleFunc("/api/p/{project}/update", s.scoped(handleUpdate))
 	mux.HandleFunc("/api/p/{project}/pr", s.scoped(handlePR))
+	mux.HandleFunc("/api/p/{project}/drop", s.scoped(handleDrop))
+	mux.HandleFunc("/api/p/{project}/drop/check", s.scoped(handleDropCheck))
 	mux.HandleFunc("/api/p/{project}/mcp/add", s.scoped(handleMCPAdd))
 	mux.HandleFunc("/api/p/{project}/mcp/auth", s.scoped(handleMCPAuth))
 	mux.HandleFunc("/api/p/{project}/mcp/remove", s.scoped(handleMCPRemove))
