@@ -101,6 +101,50 @@ func TestUploadLimits(t *testing.T) {
 	}
 }
 
+// The clipboard is the machine's, not the feature's. A terminal wants it — its agent
+// reads the picture on ⌃V — and the New work sheet, which has nothing to press ⌃V at,
+// must be able to say so: pasting a screenshot into a task should not throw away what
+// you had copied.
+func TestUploadLeavesTheClipboardAloneWhenAsked(t *testing.T) {
+	s, h, _, _ := withSessions(t)
+	copied := 0
+	s.CopyImage = func(string) bool { copied++; return true }
+
+	req := httptest.NewRequest("POST", "/api/upload?clipboard=0", bytes.NewReader(onePixelPNG))
+	req.Header.Set("Content-Type", "image/png")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 200 {
+		t.Fatalf("code = %d, %v", rec.Code, got)
+	}
+	if copied != 0 {
+		t.Errorf("the clipboard was written %d time(s) after clipboard=0", copied)
+	}
+	// And it must say so, or the page would send ⌃V for an image that isn't there.
+	if clip, _ := got["clipboard"].(bool); clip {
+		t.Error(`clipboard = true after clipboard=0`)
+	}
+	if p, _ := got["path"].(string); p == "" {
+		t.Error("no path came back, which is the only thing this caller wanted")
+	} else {
+		t.Cleanup(func() { _ = os.Remove(p) })
+	}
+
+	// Without the parameter it is still the terminal's route.
+	code, got2 := upload(t, h, onePixelPNG, "image/png")
+	if code != 200 {
+		t.Fatalf("code = %d, %v", code, got2)
+	}
+	if copied != 1 {
+		t.Errorf("the clipboard was written %d time(s), want once", copied)
+	}
+	if p, _ := got2["path"].(string); p != "" {
+		t.Cleanup(func() { _ = os.Remove(p) })
+	}
+}
+
 func TestUploadMethod(t *testing.T) {
 	_, h, _, _ := withSessions(t)
 	rec := httptest.NewRecorder()

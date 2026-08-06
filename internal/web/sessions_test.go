@@ -31,6 +31,8 @@ func withSessions(t *testing.T) (*Server, http.Handler, string, *term.Registry) 
 		Terminal: true,
 		Origins:  []string{"http://127.0.0.1:4315"},
 		Sessions: &Sessions{Reg: reg},
+		// No test may touch the clipboard of whoever is running it.
+		CopyImage: func(string) bool { return false },
 	}
 	return s, s.Handler(), r.Root, reg
 }

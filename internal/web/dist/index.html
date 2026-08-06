@@ -1555,10 +1555,14 @@ async function pasteImages(items, insert, pathsOnly) {
     files = files.filter(f => f.type === files[0].type);
   }
 
+  // clipboard=0: a destination that wants the path must not have the machine's
+  // clipboard replaced on its way there. Describing a task with a screenshot would
+  // otherwise throw away what you had copied, and the next ⌃V in a terminal would
+  // attach the sheet's picture instead of yours.
   const upload = async (f) => {
     try {
-      return await (await fetch("/api/upload", { method: "POST",
-        headers: { "Content-Type": f.type }, body: f })).json();
+      return await (await fetch("/api/upload" + (pathsOnly ? "?clipboard=0" : ""),
+        { method: "POST", headers: { "Content-Type": f.type }, body: f })).json();
     } catch { return { error: "upload failed" }; }
   };
 
@@ -1911,13 +1915,30 @@ function projectMenu(anchor) {
     items.push({ sep: true });
   }
   items.push({ label: "＋ Add a repository…", hint: "or run workmux in it", go: addProject });
-  const here = curProject();
-  if (multi() && here.id) {
-    items.push({ label: "Stop serving " + here.name, danger: true,
-                 go: () => removeProject(here) });
+  // Any of them, not just the one you happen to be looking at. Offering only the
+  // current project meant dropping another one first required selecting work inside
+  // it, and a repository whose directory is gone has no work to select. The list is
+  // remembered between runs, so what you don't remove is what you get tomorrow.
+  if (multi()) {
+    items.push({ label: "Stop serving…", hint: "remove a repository",
+                 go: () => stopServingMenu(anchor) });
   }
   menu(anchor, items);
 }
+
+// A second step rather than a row of ✕ buttons: this closes sessions, and the paths
+// are what tell two same-named checkouts apart, so they need the room.
+function stopServingMenu(anchor) {
+  const items = [{ label: "‹ Projects", go: () => projectMenu(anchor) }, { sep: true }];
+  for (const p of projects()) {
+    items.push({ label: "Stop serving " + p.name, hint: tilde(p.root),
+                 danger: true, go: () => removeProject(p) });
+  }
+  menu(anchor, items);
+}
+
+// Paths in the UI are read, not copied: $HOME is noise in every one of them.
+const tilde = (path) => (path || "").replace(/^\/(Users|home)\/[^/]+\//, "~/");
 
 // Adding one from the page is the same call `workmux` makes from another checkout,
 // so there is one way a project arrives and not two.
@@ -1952,8 +1973,13 @@ async function removeProject(p) {
       body: JSON.stringify({ id: p.id, remove: true }) })).json();
   } catch { r = { error: "server unreachable" }; }
   if (r.error) { toast(r.error); return; }
-  toast("Stopped serving " + p.name);
+  toast("Stopped serving " + p.name +
+        (r.closed ? " · " + r.closed + " session" + (r.closed === 1 ? "" : "s") + " closed" : ""));
+  // Gone from the page now rather than at the next poll: what is left on screen
+  // otherwise is a list of work in a repository this server no longer holds, and one
+  // of those rows may be the one that is selected.
   setOnly(null);
+  await poll(true);
 }
 
 // ---- sheets: new work, mcp, the log ----
