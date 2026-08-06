@@ -55,7 +55,8 @@ func TestBareRepoNeedsNoConfig(t *testing.T) {
 	// behaviour.
 	want := Agent{
 		Command: "claude", Spawn: "claude --bg {prompt}", Attach: "claude attach {id}",
-		Jobs: "~/.claude/jobs", MCP: "claude mcp", Process: "claude", Name: "claude",
+		Jobs: "~/.claude/jobs", MCP: "claude mcp", MCPAuth: "login {name} --no-browser",
+		Process: "claude", Name: "claude",
 	}
 	if c.Agent != want {
 		t.Errorf("agent = %+v\nwant %+v", c.Agent, want)

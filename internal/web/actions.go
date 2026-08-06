@@ -131,6 +131,26 @@ func handleMCPAdd(s *Server, p *project.Project, w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// handleMCPAuth hands back a URL to authorize at, rather than driving the agent's
+// own UI. Opening a session and typing into it raced the program's startup and lost
+// silently; a URL is a fact the browser can act on, and the browser is often not
+// even on this machine.
+func handleMCPAuth(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !s.postJSON(w, r, &req) {
+		return
+	}
+	start, err := p.MCP.Auth(req.Name)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	Journal.Note("mcp auth %s in %s → %s", req.Name, p.Name(), tail(start.URL, 60))
+	writeJSON(w, http.StatusOK, start)
+}
+
 func handleMCPRemove(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name  string `json:"name"`

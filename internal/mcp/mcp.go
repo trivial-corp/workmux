@@ -122,6 +122,75 @@ func classify(status string) string {
 
 var nameOK = regexp.MustCompile(`^[A-Za-z0-9][\w.-]{0,60}$`)
 
+// registeredNameOK is looser than nameOK: a name workmux *adds* is one we get to
+// constrain, but a name already in the registry is whatever the agent accepted —
+// connector names carry spaces and dots ("claude.ai Sentry"). Nothing here reaches
+// a shell (auth builds argv directly), so a space is one argument, not two.
+var registeredNameOK = regexp.MustCompile(`^[A-Za-z0-9][\w. -]{0,80}$`)
+
+// authURL is the URL on its own line, which is how the CLI prints one to a
+// terminal it isn't allowed to open a browser from.
+var authURL = regexp.MustCompile(`https://\S+`)
+
+// AuthStart is a pending authorization: where to send the person, and whether the
+// CLI is still waiting on them afterwards.
+type AuthStart struct {
+	// URL to authorize at. Always set on success.
+	URL string `json:"url"`
+	// Interactive says the CLI needs the redirect URL pasted back before the
+	// server is usable, so a link alone won't finish it. Connector-style servers
+	// authorize wholly on the vendor's side and leave this false.
+	Interactive bool `json:"interactive"`
+}
+
+// Auth asks the agent CLI for an authorization URL.
+//
+// Deliberately run with stdin closed rather than on a PTY: the CLI checks for a
+// terminal, so a server that needs the redirect pasted back fails fast and says so
+// instead of blocking here holding a connection open. Both shapes print the URL
+// before they decide, which is the part worth having either way.
+func (r *Reader) Auth(name string) (AuthStart, error) {
+	if !r.Enabled() {
+		return AuthStart{}, errString("this project has no mcp command configured")
+	}
+	if r.Cfg.Agent.MCPAuth == "" {
+		return AuthStart{}, errString("this project's agent has no way to print an authorization URL")
+	}
+	if !registeredNameOK.MatchString(name) {
+		return AuthStart{}, errString("bad server name")
+	}
+	argv := append(strings.Fields(r.Cfg.Agent.MCP), expandName(r.Cfg.Agent.MCPAuth, name)...)
+	res := run.Env(r.Cfg.Root, append(os.Environ(), "PATH="+UserPath()), 60*time.Second, argv...)
+	out := stripANSI(res.Out)
+	m := authURL.FindString(out)
+	if m == "" {
+		return AuthStart{}, errString(res.LastLine("the agent printed no authorization URL"))
+	}
+	// A non-zero exit with a URL already printed is the "finish this in a terminal"
+	// case. Reading that from the exit status rather than the complaint's wording
+	// keeps this working when the wording changes.
+	return AuthStart{URL: strings.TrimRight(m, ".,)"), Interactive: !res.OK()}, nil
+}
+
+// AuthArgv is the same command, for running in a terminal where the paste-back
+// prompt can actually be answered.
+func (r *Reader) AuthArgv(name string) []string {
+	if !r.Enabled() || r.Cfg.Agent.MCPAuth == "" || !registeredNameOK.MatchString(name) {
+		return nil
+	}
+	return append(strings.Fields(r.Cfg.Agent.MCP), expandName(r.Cfg.Agent.MCPAuth, name)...)
+}
+
+// expandName splits a template into arguments and substitutes {name} whole, so a
+// name with a space in it stays one argument.
+func expandName(tmpl, name string) []string {
+	out := strings.Fields(tmpl)
+	for i, f := range out {
+		out[i] = strings.ReplaceAll(f, "{name}", name)
+	}
+	return out
+}
+
 // Add registers a server through the agent CLI, so the CLI stays the one source of
 // truth for what is registered.
 func (r *Reader) Add(name, target, transport, scope string, env, headers []string) error {

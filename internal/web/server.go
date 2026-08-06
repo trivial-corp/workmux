@@ -90,6 +90,11 @@ type Server struct {
 // agentIDRe bounds what can be passed to an attach command.
 var agentIDRe = regexp.MustCompile(`^[0-9a-fA-F-]{6,64}$`)
 
+// mcpNameRe admits the names an agent actually registers, spaces and dots included
+// ("claude.ai Sentry"). The name is single-quoted before it reaches a shell; this is
+// the second lock, not the only one.
+var mcpNameRe = regexp.MustCompile(`^[A-Za-z0-9][\w. -]{0,80}$`)
+
 // resolveResume answers "give me this worktree's agent": attach to the one that's
 // there, or start a fresh session rather than making the button a dead end.
 func resolveResume(p *project.Project, cwd string) (term.Kind, string) {
@@ -135,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/p/{project}/update", s.scoped(handleUpdate))
 	mux.HandleFunc("/api/p/{project}/pr", s.scoped(handlePR))
 	mux.HandleFunc("/api/p/{project}/mcp/add", s.scoped(handleMCPAdd))
+	mux.HandleFunc("/api/p/{project}/mcp/auth", s.scoped(handleMCPAuth))
 	mux.HandleFunc("/api/p/{project}/mcp/remove", s.scoped(handleMCPRemove))
 	if s.Sessions != nil {
 		// A session belongs to a worktree, so starting one is about a project. Once

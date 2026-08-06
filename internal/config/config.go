@@ -38,6 +38,10 @@ var agentPresets = map[string]Agent{
 		Attach: "claude attach {id}",
 		Jobs:   "~/.claude/jobs",
 		MCP:    "claude mcp",
+		// --no-browser prints the URL instead of opening one, which is the only
+		// form that works when the dashboard is on a different machine to the
+		// browser — the whole point of reaching workmux from a phone.
+		MCPAuth: "login {name} --no-browser",
 	},
 }
 
@@ -49,6 +53,10 @@ type Agent struct {
 	Attach  string `json:"attach"`  // how to take over a running one, with {id}
 	Jobs    string `json:"jobs"`    // directory of per-agent state
 	MCP     string `json:"mcp"`     // subcommand prefix for the MCP registry
+	// MCPAuth is the MCP subcommand that prints an authorization URL rather than
+	// opening a browser, with {name}. Empty means this agent can't hand out a URL,
+	// and the panel says so instead of offering a button that goes nowhere.
+	MCPAuth string `json:"mcpAuth"`
 	Process string `json:"process"` // process name that means "working here"
 	Name    string `json:"name"`    // what to call it in the UI
 }
@@ -173,6 +181,9 @@ func resolveAgent(rm json.RawMessage) Agent {
 	}
 	if a.MCP == "" {
 		a.MCP = preset.MCP
+	}
+	if a.MCPAuth == "" {
+		a.MCPAuth = preset.MCPAuth
 	}
 	if a.Process == "" {
 		// What "running" means: a live process of this name inside a worktree.

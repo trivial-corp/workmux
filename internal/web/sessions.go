@@ -68,6 +68,10 @@ func handleSessionNew(s *Server, p *project.Project, w http.ResponseWriter, r *h
 		k, agent := resolveResume(p, req.CWD)
 		kind, req.Agent = k, agent
 	}
+	if kind == term.KindMCPAuth && !mcpNameRe.MatchString(req.Agent) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad server name"})
+		return
+	}
 	if kind == term.KindAttach {
 		if !agentIDRe.MatchString(req.Agent) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad agent id"})

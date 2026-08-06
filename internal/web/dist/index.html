@@ -297,6 +297,10 @@ main[data-surface="changes"] .pane { display:none; }
 .srv[data-state="fail"] .dot { background:var(--danger); }
 .srv[data-state="auth"] .dot { background:var(--wants); }
 .srv[data-state="pending"] .dot { background:var(--idle); }
+.srv .auth { display:grid; gap:6px; justify-items:start; margin-top:2px;
+  padding-top:8px; border-top:1px dashed var(--line); }
+.srv .auth a { font-family:var(--mono); font-size:11px; color:var(--accent);
+  overflow-wrap:anywhere; }
 .logline { display:flex; gap:9px; align-items:baseline; font-family:var(--mono);
            font-size:11px; line-height:1.65; }
 .logline .t { color:var(--t3); flex:0 0 auto; }
@@ -1112,13 +1116,16 @@ function showEmpty(existing) {
   t.append(box);
 }
 
-async function start(kind) {
+// subject is what the kind is about, when it needs one: an MCP server name for an
+// authorization round. The server names the field `agent` for every kind.
+async function start(kind, subject) {
   const size = fitSize();
   let r;
   try {
     r = await (await fetch(api("/session/new", (selected() || {}).project), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, cwd: SEL, cols: size.cols, rows: size.rows }),
+      body: JSON.stringify({ kind, cwd: SEL, agent: subject || "",
+                             cols: size.cols, rows: size.rows }),
     })).json();
   } catch { return; }
   if (r.error) {
@@ -1408,6 +1415,11 @@ function connect(id, pane) {
     // into a corner until something else (changing the font) resized it again.
     try { pane.fit.fit(); } catch {}
     send(pane, JSON.stringify({ t: "size", cols: pane.term.cols, rows: pane.term.rows }));
+    // Anything written while this was connecting, now that there is somewhere to put
+    // it — after the size, so the program never sees input at the wrong geometry.
+    const queued = pane.queued;
+    pane.queued = null;
+    if (queued) for (const d of queued) ws.send(d);
   };
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") {
@@ -1569,8 +1581,14 @@ function staleNotice() {
   document.body.append(bar);
 }
 
+// A socket that is still CONNECTING accepts nothing and says nothing: hand it bytes
+// and they are gone. That silence is what made a resize sent during attach, and a
+// command sent right after a session opened, look like the feature simply not
+// working. Queue until it opens; drop only once it is truly closed.
 function send(pane, data) {
-  if (pane && pane.ws && pane.ws.readyState === 1) pane.ws.send(data);
+  if (!pane || !pane.ws) return;
+  if (pane.ws.readyState === 0) { (pane.queued ||= []).push(data); return; }
+  if (pane.ws.readyState === 1) pane.ws.send(data);
 }
 
 function sendText(text) { send(PANES.get(ACTIVE), new TextEncoder().encode(text)); }
@@ -2024,12 +2042,8 @@ async function renderMcp(refresh) {
     const row = el("div", "row");
     if (x.state === "auth") {
       const b = el("button", "b", "authenticate");
-      b.title = "Opens an agent session and runs /mcp, where the OAuth round happens";
-      b.onclick = async () => {
-        closeSheet();
-        await start("agent");
-        setTimeout(() => sendText("/mcp\r"), 1500);
-      };
+      b.title = "Ask the agent CLI where to authorize this server";
+      b.onclick = () => authenticate(where.id, x.name, card, b);
       row.append(b);
     }
     const rm = el("button", "b", "remove");
@@ -2051,6 +2065,58 @@ async function renderMcp(refresh) {
   const refreshBtn = el("button", "b", "↻ re-check");
   refreshBtn.onclick = () => renderMcp(true);
   foot.append(addBtn, refreshBtn);
+}
+
+// authenticate asks the agent CLI where to authorize, and shows the answer as a link.
+//
+// The old version opened an agent session and typed a command into it after a fixed
+// wait. Two things were wrong with that: the socket was usually still connecting, so
+// the keystrokes went nowhere at all, and even when they landed the agent was still
+// starting up. Either way you got an empty session and no explanation. A URL can't
+// race anything — and it works from a phone, which a terminal on this host does not.
+async function authenticate(project, name, card, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "asking…";
+  let d;
+  try {
+    d = await (await fetch(api("/mcp/auth", project), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })).json();
+  } catch { d = { error: "couldn't reach workmux" }; }
+  btn.disabled = false;
+  btn.textContent = label;
+
+  const old = card.querySelector(".auth");
+  if (old) old.remove();
+  const box = el("div", "auth");
+  if (d.error || !d.url) {
+    box.append(el("div", "dt", d.error || "the agent printed no authorization URL"));
+    card.append(box);
+    return;
+  }
+  const a = el("a", null, "authorize ↗");
+  a.href = d.url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  box.append(a, el("div", "dt", d.url));
+  if (d.interactive) {
+    // The CLI is holding the PKCE verifier and a callback on its own localhost, which
+    // is not reachable from a phone. Finishing means pasting the redirect URL back to
+    // that same process, so it has to be a terminal — and the command *is* the
+    // session, so there is nothing to type at the right moment.
+    box.append(el("div", "dt",
+      "the redirect page will fail if your browser isn't on this machine — that's fine, " +
+      "copy the URL it lands on and paste it into the session below"));
+    const t = el("button", "b", "finish in a terminal");
+    t.onclick = async () => { closeSheet(); await start("mcpauth", name); };
+    box.append(t);
+  } else {
+    box.append(el("div", "dt",
+      "authorize there, then restart the agent — it picks the connector up on its next start"));
+  }
+  card.append(box);
 }
 
 function renderMcpAdd() {
