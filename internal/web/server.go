@@ -126,6 +126,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/changes", s.guard(s.handleChanges))
 	mux.HandleFunc("/api/diff", s.guard(s.handleDiff))
 	mux.HandleFunc("/api/log", s.guard(s.handleLog))
+	mux.HandleFunc("/api/stacks", s.guard(s.handleStacks))
 	if s.Actions != nil {
 		mux.HandleFunc("/api/new", s.guard(s.handleNewWork))
 		mux.HandleFunc("/api/stack", s.guard(s.handleStack))

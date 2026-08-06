@@ -103,9 +103,13 @@ main[data-surface="changes"] .pane { display:none; }
   .strip[data-tone="live"] .rail { animation:breathe 2.6s ease-in-out infinite; }
 }
 @keyframes breathe { 0%,100% { opacity:1 } 50% { opacity:.45 } }
-.strip .body { flex:1 1 auto; display:grid; gap:3px; }
+.strip .body { flex:1 1 auto; display:grid; gap:3px; min-width:0; }
+.strip .head { display:flex; align-items:baseline; gap:8px; min-width:0; }
+.strip .seen { margin-left:auto; flex:0 0 auto; font-family:var(--mono); font-size:10px;
+               color:var(--t3); white-space:nowrap; }
+.strip .seen.last { color:var(--wants); }
 .strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--t1);
-                 overflow-wrap:anywhere; }
+                 overflow-wrap:anywhere; min-width:0; }
 .strip[data-tone="base"] .branch { font-weight:400; color:var(--t2); }
 .strip .said { font-size:11.5px; color:var(--t2); overflow:hidden; text-overflow:ellipsis;
                white-space:nowrap; }
@@ -216,6 +220,16 @@ main[data-surface="changes"] .pane { display:none; }
 .diff .dhead .plus { color:#7ee2a8; flex:0 0 auto; }
 .diff .dhead .minus { color:#f79a9a; flex:0 0 auto; }
 .diff .dhead .bin { color:var(--t3); flex:0 0 auto; }
+
+.usage { display:flex; flex-wrap:wrap; gap:10px; padding:12px; border-bottom:1px solid var(--line-soft); }
+.usage .u { flex:1 1 120px; display:grid; gap:2px; padding:9px 11px; border:1px solid var(--line);
+            border-radius:8px; background:var(--elev); }
+.usage .k { font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--t3); }
+.usage .v { font-family:var(--mono); font-size:17px; color:var(--t1); }
+.usage .s { font-size:10.5px; color:var(--t3); }
+.snip { margin:0 12px 12px; padding:11px 12px; background:var(--ink); border:1px solid var(--line);
+        border-radius:8px; font-family:var(--mono); font-size:11px; line-height:1.55;
+        color:var(--t2); overflow-x:auto; white-space:pre; }
 
 /* ── sheets ──────────────────────────────────────────────────────────────── */
 .scrim { position:fixed; inset:0; background:#000c; display:none; z-index:9; }
@@ -342,7 +356,8 @@ body.full main .pane { display:flex; }
   <div class="acts">
     <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
       ＋<span class="lbl"> New work</span></button>
-    <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
+    <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">▤ Stacks</button>
+  <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
       ◇<span class="lbl"> MCP</span></button>
     <button class="b wide" onclick="openSheet('log')" title="What this workmux process has been doing">
       ▤<span class="lbl"> Server log</span></button>
@@ -382,10 +397,10 @@ body.full main .pane { display:flex; }
 <script>
 // Plain DOM on purpose, for now: this is being replaced by a TS build that a mobile
 // app will load as well, and porting the same logic twice is how details get lost.
-const el = (t, c, x) => {
+const el = (t, c, ...kids) => {
   const n = document.createElement(t);
   if (c) n.className = c;
-  if (x != null) n.append(x);          // a string or a node — both are appended
+  for (const k of kids) if (k != null) n.append(k);   // strings or nodes, both appended
   return n;
 };
 const $ = (id) => document.getElementById(id);
@@ -526,7 +541,17 @@ function strip(w, tone) {
   row.setAttribute("aria-selected", w.path === SEL ? "true" : "false");
   row.append(el("i", "rail"));
   const body = el("div", "body");
-  body.append(el("div", "branch", w.branch));
+  // The branch is the only name here that holds still. Everything else on this card is
+  // the agent talking about itself, and it renames itself as the work moves — which is
+  // no way to find the one you were in an hour ago. So the card also says when that was.
+  const head = el("div", "head");
+  head.append(el("div", "branch", w.branch));
+  const seen = SEEN[w.path];
+  if (seen) {
+    const last = w.path === latestSeen();
+    head.append(el("span", "seen" + (last ? " last" : ""), last ? "last here" : ago(seen)));
+  }
+  body.append(head);
 
   // What it last said, in its own words. This is the line you actually read.
   const agent = (w.agents || [])[0];
@@ -555,6 +580,7 @@ function strip(w, tone) {
   row.append(body);
   row.onclick = () => {
     SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
+    markSeen(w.path);
     renderWork();
     setSurface("session");
     showWork(true);              // its session, not an empty pane
@@ -564,6 +590,39 @@ function strip(w, tone) {
 }
 
 const selected = () => WORK.find(w => w.path === SEL) || null;
+
+// Which worktrees you have actually been in, and when. The browser remembers this rather
+// than the server: it's a fact about you, not about the repo, and the answer it gives is
+// the one the names can't — "this is the one you were in before".
+const SEEN_KEY = "workmux.seen";
+let SEEN = {};
+try { SEEN = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") || {}; } catch { SEEN = {}; }
+
+function markSeen(path) {
+  if (!path) return;
+  SEEN[path] = Date.now();
+  // Bounded: a worktree that no longer exists is a row nobody will ever read again.
+  const live = new Set(WORK.map(w => w.path));
+  for (const p of Object.keys(SEEN)) if (!live.has(p) && WORK.length) delete SEEN[p];
+  try { localStorage.setItem(SEEN_KEY, JSON.stringify(SEEN)); } catch {}
+}
+
+function latestSeen() {
+  let best = null;
+  for (const [p, t] of Object.entries(SEEN)) if (!best || t > SEEN[best]) best = p;
+  return best;
+}
+
+function ago(ms) {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return "just now";
+  const m = s / 60;
+  if (m < 60) return Math.round(m) + "m ago";
+  const h = m / 60;
+  if (h < 24) return Math.round(h) + "h ago";
+  const d = Math.round(h / 24);
+  return d === 1 ? "yesterday" : d + "d ago";
+}
 
 // The session to show for a piece of work: the agent you're attached to, else whatever
 // is open. Switching work used to land on "pick a session" even when that work had
@@ -897,6 +956,7 @@ async function kill(id) {
 // a node that is no longer in the document, which is a pane that paints nothing.
 async function open(id) {
   ACTIVE = id;
+  markSeen(SEL);
   setSurface("session");
   const box = $("term");
   hideHollow();
@@ -1540,6 +1600,7 @@ function openSheet(which) {
   if (which === "new") renderNew();
   if (which === "mcp") renderMcp(false);
   if (which === "log") renderLog();
+  if (which === "stacks") renderStacks(false);
   if (which === "keys") renderKeysSheet();
   if (which === "more") renderMore();
 }
@@ -1743,6 +1804,7 @@ function renderMore() {
   const body = $("sbody"), foot = $("sfoot");
   body.className = "sbody"; body.textContent = ""; foot.textContent = "";
   const items = [
+    ["Stacks", "What is running and what it costs", () => openSheet("stacks")],
     ["MCP servers", "Which servers an agent can reach", () => openSheet("mcp")],
     ["Server log", "What this instance has been doing", () => openSheet("log")],
     ["Keyboard", "Chords a phone keyboard can't type", () => openSheet("keys")],
@@ -1753,6 +1815,128 @@ function renderMore() {
     row.onclick = fn;
     body.append(row);
   }
+}
+
+// ---- stacks: what is running, and what it costs ----
+
+const gb = (n) => n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + " GB"
+                : n >= 1 << 20 ? Math.round(n / (1 << 20)) + " MB" : (n || 0) + " B";
+
+function upFor(epoch) {
+  if (!epoch) return "";
+  const s = Date.now() / 1000 - epoch;
+  if (s < 90) return "up just now";
+  if (s < 3600) return "up " + Math.round(s / 60) + "m";
+  if (s < 86400) return "up " + Math.round(s / 3600) + "h";
+  return "up " + Math.round(s / 86400) + "d";
+}
+
+async function renderStacks(quiet) {
+  $("stitle").textContent = "Stacks";
+  const body = $("sbody"), foot = $("sfoot");
+  if (!quiet) {
+    body.textContent = ""; foot.textContent = "";
+    body.append(el("div", "hollow", el("p", null, "asking docker…")));
+  }
+  let d;
+  try { d = await (await fetch("/api/stacks")).json(); } catch { d = { enabled: false, error: 1 }; }
+  if (SHEET !== "stacks") return;              // you closed it while docker was thinking
+  body.textContent = ""; foot.textContent = "";
+
+  if (!d.enabled) { stackSetup(body); return; }
+
+  const stacks = d.stacks || [], m = d.machine || {};
+  // The machine line first: what one stack costs means little without what it's a share of.
+  const sum = el("div", "usage");
+  const cell = (k, v, sub) => {
+    const c = el("div", "u");
+    c.append(el("div", "k", k), el("div", "v", v));
+    if (sub) c.append(el("div", "s", sub));
+    sum.append(c);
+  };
+  cell("stacks", String(stacks.length), stacks.length ? "of this repo" : "none running");
+  cell("cpu", (m.cpu || 0).toFixed(0) + "%", "of one core · " + (m.containers || 0) + " containers");
+  cell("memory", gb(m.mem_bytes || 0), m.mem_total ? "of " + gb(m.mem_total) + " docker has" : "");
+  if (m.others) cell("not yours", String(m.others), "containers from elsewhere");
+  body.append(sum);
+
+  if (!stacks.length) {
+    body.append(el("div", "hollow",
+      el("h3", null, d.docker ? "No stack of this repo is running." : "Docker isn't answering."),
+      el("p", null, d.docker
+        ? "Start one from a piece of work — it takes the next free slot" +
+          (d.next_slot ? ", which is " + d.next_slot + "." : ".")
+        : "Nothing here can be read until it is, and the rest of the dashboard doesn't need it.")));
+    return;
+  }
+
+  for (const s of stacks) {
+    const w = WORK.find(x => x.path === s.path);
+    const card = el("div", "srv");
+    card.dataset.state = s.up === s.total ? "ok" : "fail";
+    const nm = el("div", "nm");
+    nm.append(el("i", "dot"), document.createTextNode(s.slot));
+    if (w) nm.append(el("span", "scope", w.branch));
+    card.append(nm);
+    card.append(el("div", "dt",
+      [s.up + "/" + s.total + " up", (s.cpu || 0).toFixed(0) + "% cpu",
+       gb(s.mem_bytes || 0), upFor(s.started_epoch)].filter(Boolean).join("  ·  ")));
+    const down = (s.services || []).filter(x => x.state !== "running").map(x => x.name);
+    if (down.length) card.append(el("div", "dt", "not running: " + down.join(", ")));
+
+    const row = el("div", "row");
+    if (s.url) {
+      const a = el("a", "b", "open");
+      a.href = s.url; a.target = "_blank"; a.rel = "noopener";
+      row.append(a);
+    }
+    const act = (label, fn, title) => {
+      const b = el("button", "b", label);
+      if (title) b.title = title;
+      b.onclick = fn;
+      row.append(b);
+    };
+    act("restart", async () => { await stackAction("restart", w || { stack: s }); renderStacks(true); });
+    act("stop", async () => { await stackAction("stop", w || { stack: s }); renderStacks(true); },
+        "Frees the slot and the memory it is holding");
+    if (w) act("go to work", () => {
+      closeSheet(); SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
+    });
+    card.append(row);
+    body.append(card);
+  }
+
+  const again = el("button", "b", "↻ refresh");
+  again.onclick = () => renderStacks(false);
+  foot.append(again);
+}
+
+// No stack configured is a normal answer — most repos don't have one. Say what it would
+// buy and exactly what to write, rather than showing an empty panel.
+function stackSetup(body) {
+  body.append(el("div", "hollow",
+    el("h3", null, "This project has no stack."),
+    el("p", null, "A stack is the containers one piece of work runs on: its own compose " +
+                  "project, its own slot, its own URL. With one configured, every worktree " +
+                  "can bring its app up beside the others instead of fighting over one set " +
+                  "of ports."),
+    el("p", null, "workmux init writes this for you when it finds a compose file. By hand, " +
+                  "it goes in workmux.json at the repo root:")));
+  const snip = el("pre", "snip");
+  snip.textContent = JSON.stringify({
+    stack: {
+      compose: "docker-compose.yml",
+      slots: ((STATE && STATE.name) || "app") + "{n}",
+      url: "http://{slot}.localhost",
+    },
+  }, null, 2);
+  body.append(snip);
+  body.append(el("div", "hollow",
+    el("p", null, "slots is the naming pattern for each worktree's compose project, where " +
+                  "{n} is the slot number. url is where that slot answers — leave it out " +
+                  "and workmux won't offer an Open button rather than offering a broken one."),
+    el("p", null, "examples/localhost-routing in the workmux repo is a working two-slot " +
+                  "setup behind a proxy, if you want names rather than ports.")));
 }
 
 // The chords, on request rather than dumped into an empty pane.
