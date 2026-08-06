@@ -1,6 +1,7 @@
 package term
 
 import (
+	"bytes"
 	"os"
 	"strings"
 	"testing"
@@ -445,4 +446,74 @@ func TestPlainSessionStillReplaysAtAnyWidth(t *testing.T) {
 	if !strings.Contains(string(replay), "SCROLLBACK-KEPT") {
 		t.Errorf("a shell's scrollback survives a resize:\n%q", replay)
 	}
+}
+
+// The scrollback is replayed verbatim on attach, so where it gets cut matters. Cut
+// mid-escape and the replay begins with a partial CSI, which a terminal swallows
+// along with everything after it — the pane opens blank, and only what the program
+// redraws later shows up. It takes a session old enough to have wrapped, which is
+// every agent session and no test session.
+func TestTrimPointNeverCutsInsideAnEscape(t *testing.T) {
+	// A line of output, then a colour change split across the cut.
+	buf := []byte("old line\n\x1b[38;5;42mgreen text\nmore\n")
+	for cut := 0; cut < len(buf); cut++ {
+		got := trimPoint(buf, cut)
+		if got < cut {
+			t.Fatalf("cut %d moved backwards to %d", cut, got)
+		}
+		rest := buf[got:]
+		// Whatever is left must not begin part-way through an escape sequence: it
+		// either starts at ESC or contains no stray sequence opener before its first.
+		if i := bytes.IndexByte(rest, 0x1b); i > 0 {
+			if bytes.Contains(rest[:i], []byte("[38;5;")) {
+				t.Errorf("cut %d left a partial escape: %q", cut, rest[:i])
+			}
+		}
+	}
+}
+
+func TestTrimPointBoundaries(t *testing.T) {
+	buf := []byte("aaa\nbbb\nccc")
+	if got := trimPoint(buf, 0); got != 0 {
+		t.Errorf("a cut of 0 should stay put, got %d", got)
+	}
+	// Lands inside "aaa" → moves to just after the first newline.
+	if got := trimPoint(buf, 1); got != 4 {
+		t.Errorf("trimPoint(1) = %d, want 4", got)
+	}
+	// Already on a boundary → the byte after that newline.
+	if got := trimPoint(buf, 3); got != 4 {
+		t.Errorf("trimPoint(3) = %d, want 4", got)
+	}
+	// No newline left: keep what was asked rather than dropping everything.
+	if got := trimPoint(buf, 9); got != 9 {
+		t.Errorf("trimPoint(9) = %d, want 9", got)
+	}
+}
+
+// End to end: a session that has wrapped must still replay something a terminal can
+// parse from the first byte.
+func TestReplayAfterWrappingStartsCleanly(t *testing.T) {
+	s := &Session{done: make(chan struct{}), viewers: map[*Viewer]struct{}{}, modes: newModeSet()}
+	// Coloured lines, well past the ring, so the front is definitely trimmed. A
+	// fixed count, not "until it's big enough": the trim caps it, so that loop
+	// never ends.
+	line := []byte("\x1b[38;5;42mLINE of green output that is reasonably long\x1b[0m\n")
+	for written := 0; written < scrollback+8*1024; written += len(line) {
+		s.broadcast(line)
+	}
+	if len(s.buf) > scrollback+len(line) {
+		t.Fatalf("buffer is %d, cap is %d", len(s.buf), scrollback)
+	}
+	// The first escape in the replay must be a whole one, not the tail of another.
+	if i := bytes.IndexByte(s.buf, 0x1b); i != 0 {
+		t.Errorf("replay starts %d bytes into a line: %q", i, s.buf[:min(i, 40)])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

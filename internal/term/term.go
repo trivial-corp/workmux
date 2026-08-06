@@ -11,6 +11,7 @@
 package term
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -213,13 +214,37 @@ func (s *Session) pump() {
 	s.mu.Unlock()
 }
 
+// trimPoint moves a cut forward to the next line break.
+//
+// The scrollback is a byte log that gets replayed verbatim when you attach, and
+// cutting it at an arbitrary offset can leave it starting halfway through an escape
+// sequence. A terminal fed a partial CSI swallows everything up to the next
+// terminator looking for the end of it — so the pane opens blank, or missing its
+// first screenful, and only what the program redraws afterwards appears. That is a
+// bug you only ever see on a session old enough to have wrapped, which is every
+// agent session and no test session.
+//
+// A line break is a safe place to start because an escape sequence cannot contain
+// one. Trimming a little more than asked is the right trade against replaying
+// nonsense; a run with no line break at all is left where it was rather than
+// throwing the whole buffer away.
+func trimPoint(buf []byte, cut int) int {
+	if cut <= 0 {
+		return 0
+	}
+	if i := bytes.IndexByte(buf[cut:], '\n'); i >= 0 {
+		return cut + i + 1
+	}
+	return cut
+}
+
 func (s *Session) broadcast(chunk []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.modes.feed(chunk)
 	s.buf = append(s.buf, chunk...)
 	if len(s.buf) > scrollback {
-		s.buf = append([]byte(nil), s.buf[len(s.buf)-scrollback:]...)
+		s.buf = append([]byte(nil), s.buf[trimPoint(s.buf, len(s.buf)-scrollback):]...)
 	}
 	for v := range s.viewers {
 		select {
