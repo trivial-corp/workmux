@@ -42,8 +42,13 @@ var stopwords = map[string]bool{
 }
 
 var (
-	wordRe  = regexp.MustCompile(`[a-z0-9]+`)
-	nameOK  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,60}$`)
+	wordRe = regexp.MustCompile(`[a-z0-9]+`)
+	nameOK = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,60}$`)
+	// pasteRe is the path a screenshot pasted into the task leaves behind (see the
+	// upload directory in internal/web/upload.go). A branch called
+	// var-folders-workmux-pastes says nothing about the work, and pasting the picture
+	// before typing is the natural order.
+	pasteRe = regexp.MustCompile(`\S*workmux-pastes-\d+\S*`)
 	prNumRe = regexp.MustCompile(`(\d+)`)
 )
 
@@ -303,7 +308,7 @@ func slugify(s string) string {
 // nameFromTask derives a branch name from what the task says.
 func nameFromTask(prompt string) string {
 	var words []string
-	for _, w := range wordRe.FindAllString(strings.ToLower(prompt), -1) {
+	for _, w := range wordRe.FindAllString(strings.ToLower(pasteRe.ReplaceAllString(prompt, " ")), -1) {
 		if len(w) > 1 && !stopwords[w] {
 			words = append(words, w)
 		}

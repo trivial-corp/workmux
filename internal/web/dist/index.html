@@ -1532,7 +1532,11 @@ function wirePane(id, pane) {
 // Preference order for the same picture in several formats.
 const IMAGE_RANK = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-async function pasteImages(items, insert) {
+// pathsOnly is for a destination that is text rather than a live agent — the New work
+// sheet, whose task becomes a command-line argument long before anything is at a
+// prompt. There is nothing there to press ⌃V, so the path is the only thing that can
+// carry the picture, and asking for the clipboard route instead inserted nothing at all.
+async function pasteImages(items, insert, pathsOnly) {
   let files = [];
   for (const item of items || []) {
     if (item.kind === "file" && (item.type || "").startsWith("image/")) {
@@ -1562,15 +1566,20 @@ async function pasteImages(items, insert) {
   // The system clipboard holds *one* image and the agent reads it on every ⌃V, so two
   // keystrokes attach the same picture twice — which is what doubled the screenshot.
   // One paste, one keystroke, however many formats the clipboard offered.
-  if (first.clipboard) {
+  if (first.clipboard && !pathsOnly) {
     insert("\x16");
     return true;
   }
-  // No shared clipboard (a remote instance): each image gets its path instead, in
-  // bracketed-paste markers so it arrives as a paste rather than as typing.
+  // Nothing to press ⌃V — a remote instance shares no clipboard, and work being
+  // described doesn't have an agent yet — so each image goes in as its path. A terminal
+  // wants bracketed-paste markers around it, and a trailing space inside them, so it
+  // arrives as a paste and two images don't run into one path.
   for (let i = 0; i < files.length; i++) {
     const r = i === 0 ? first : await upload(files[i]);
-    insert(r.path ? "\x1b[200~" + r.path + "\x1b[201~" : "[" + (r.error || "upload failed") + "]");
+    // A failed upload has no path to insert, and saying so in the text would leave
+    // something to delete in the place that is about to be sent.
+    if (!r.path) { toast(r.error || "that image could not be uploaded"); continue; }
+    insert(pathsOnly ? r.path : "\x1b[200~" + r.path + " \x1b[201~");
   }
   return true;
 }
@@ -2078,7 +2087,8 @@ function renderNew() {
   }
   // No branch name asked for: it comes from what you wrote. Needing to invent one
   // before starting is exactly the friction that stops people branching.
-  const task = el("label", null, "What needs doing? The branch name comes from this.");
+  const task = el("label", null,
+    "What needs doing? The branch name comes from this — paste a screenshot in too.");
   const ta = el("textarea");
   ta.placeholder = "e.g. hotel search times out on long stays";
   task.append(ta);
@@ -2092,21 +2102,32 @@ function renderNew() {
     "It branches off the remote, copies the gitignored files a worktree needs, starts an agent, "
     + "and starts no containers — attach a stack later if the change turns out to need one.");
   body.append(task, nameLbl, baseLbl, note);
-  // A pasted screenshot belongs here too: it's the same "here's what's wrong".
-  ta.addEventListener("paste", (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    if ([...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) {
-      e.preventDefault();
-      pasteImages(items, (t) => {
-        const at = ta.selectionStart || ta.value.length;
-        ta.value = ta.value.slice(0, at) + t.replace(/\x1b\[20[01]~|\x16/g, "") + ta.value.slice(at);
-      });
-    }
-  });
 
   const go = el("button", "b on", "Create");
   const status = el("span", "meta", "");
+  // A pasted screenshot belongs here too: it's the same "here's what's wrong". The
+  // task text is what the agent is started with, so the image goes in as a path —
+  // there is no session yet whose clipboard could hold it.
+  ta.addEventListener("paste", (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    if (![...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) return;
+    e.preventDefault();
+    // An upload is a round trip, and a textarea that does nothing for a second reads
+    // as the paste having been swallowed — which is exactly what used to happen.
+    status.textContent = "uploading the image…";
+    pasteImages(items, (path) => {
+      const at = ta.selectionStart ?? ta.value.length;
+      const before = ta.value.slice(0, at), after = ta.value.slice(at);
+      const text = (before && !/\s$/.test(before) ? " " : "") + path
+                 + (after && !/\s/.test(after[0]) ? " " : "");
+      ta.value = before + text + after;
+      // Leave the caret after the path, or a second paste lands in front of the first
+      // and the two come out in the wrong order.
+      ta.setSelectionRange(at + text.length, at + text.length);
+    }, true).finally(() => { status.textContent = ""; });
+  });
+
   go.onclick = async () => {
     go.disabled = true; status.textContent = "creating…";
     let r;
