@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,21 +12,19 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/trivial-corp/workmux/internal/bg"
+	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/term"
 )
 
 // Sessions is what the web layer needs to hand out terminals. Nil disables them
 // entirely (--no-terminal), and then none of these routes exist rather than
 // answering "disabled" — an absent capability shouldn't look like a broken one.
+//
+// One registry for the whole server, not one per project: a session is a process
+// this process is holding, and which repository it was opened in is a property of
+// the session rather than a reason to keep separate books.
 type Sessions struct {
 	Reg *term.Registry
-	// Presets turns a requested kind into something runnable, given a worktree.
-	// It lives outside this package because what "the agent" means is config.
-	Presets func(kind term.Kind, cwd, agentID string) (term.Spec, error)
-	// KnownDir reports whether a directory is one of this repo's worktrees. A
-	// session is a shell, so the caller decides where one may be opened — never
-	// the request.
-	KnownDir func(string) bool
 }
 
 type newSessionRequest struct {
@@ -45,7 +42,7 @@ func (s *Server) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
+func handleSessionNew(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "post only"})
 		return
@@ -56,9 +53,11 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A shell in an arbitrary directory is the one thing this must never do, so the
-	// directory has to be one of the repo's own worktrees.
-	if !s.Sessions.KnownDir(req.CWD) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of this repository"})
+	// directory has to be one of this project's own worktrees. Scoping it to the
+	// project in the path, rather than to any project the server holds, is what
+	// keeps the check meaningful once there are several.
+	if !p.Owns(req.CWD) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
 		return
 	}
 
@@ -66,7 +65,7 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 	// "resume" is a question — give me this worktree's agent — answered here so the
 	// answer is the same from the dock, a keystroke or curl.
 	if req.Kind == "resume" {
-		k, agent := s.resolveResume(req.CWD)
+		k, agent := resolveResume(p, req.CWD)
 		kind, req.Agent = k, agent
 	}
 	if kind == term.KindAttach {
@@ -82,7 +81,7 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	spec, err := s.Sessions.Presets(kind, req.CWD, req.Agent)
+	spec, err := p.Spec(kind, req.CWD, req.Agent)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -97,7 +96,7 @@ func (s *Server) handleSessionNew(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
-	Journal.Note("session %s (%s) started in %s", sess.ID, sess.Kind, filepath.Base(sess.CWD))
+	Journal.Note("session %s (%s) started in %s", sess.ID, sess.Kind, p.Where(sess.CWD))
 	writeJSON(w, http.StatusOK, sess.Info())
 }
 

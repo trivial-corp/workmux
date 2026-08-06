@@ -6,8 +6,9 @@ Run several coding agents at once — one git worktree each — from a browser.
 workmux
 ```
 
-It serves the repo you're standing in at <http://127.0.0.1:4315>. A single static
-binary, no runtime, no config, and it works from a phone.
+It serves the repo you're standing in at <http://127.0.0.1:4315>. Run it in another
+repo and that one joins the same page — one server, one port, every project you have
+in flight. A single static binary, no runtime, no config, and it works from a phone.
 
 > **Status: the Go rewrite is in progress.** The dashboard, the API and the
 > the agent↔worktree mapping, terminal sessions, changes, actions and the MCP panel are
@@ -145,15 +146,47 @@ Off loopback a token is required. It still speaks plain HTTP, so put Tailscale, 
 reverse proxy with TLS, or an SSH tunnel in front — `ssh -L 4315:127.0.0.1:4315
 homelab` needs no token at all and is the safest way in.
 
-## Several at once
+## Several projects, one page
 
-Running one per project is the normal case, so the browser tab and the header both
-lead with the project: **`trip1 · workmux`**, **`nas · workmux`**. Give each one its
-own port:
+Work isn't one repository. You're in `trip1` in the morning and `homelab` in the
+afternoon, and both have agents running. So just run it where you are:
 
 ```
-workmux --root ~/code/trip1                 # 4315
-workmux --root ~/code/other --port 4316
+cd ~/code/trip1   && workmux      # starts a server on 4315
+cd ~/code/homelab && workmux      # joins it — same page, same port
+```
+
+The second invocation finds the first, hands over the repository it was started in,
+and exits. Nothing to configure, no second port to remember, no second tab. Or name
+them all up front:
+
+```
+workmux ~/code/trip1 ~/code/homelab
+workmux --root ~/code/trip1 --root ~/code/homelab    # the same thing
+```
+
+**The work list is merged, not tabbed.** The whole point of the ordering is *what
+wants me right now*, and that question doesn't stop at a repository boundary — a
+blocked agent in `homelab` belongs above a quiet worktree in `trip1`. Rows say which
+repo they're from; the project name in the header is a filter when you want one
+repository's worth, and "All projects" when you don't.
+
+Everything else stays per-repository, because it is: base branch, stack slots, the
+agent's MCP registry, what `New work` branches from. Selecting a piece of work aims
+those at its repo, so switching is something you do by clicking the work you meant.
+
+The header menu also adds a repository by path and stops serving one. Stopping
+closes that project's sessions — a shell in a worktree the server no longer holds is
+a process nothing has a route to — and it says how many before it does it.
+
+How the second invocation finds the first: a running server writes its URL to
+`$XDG_STATE_HOME/workmux/server.json` (`~/.local/state/workmux/server.json`), and a
+later one reads it, checks a workmux is actually answering there, and posts to
+`/api/projects`. Pass `--standalone` to skip that and get a server of your own; it also doesn't
+become the one later invocations look for first.
+
+```
+workmux --standalone --port 4316 --root ~/code/scratch
 ```
 
 ## Setting it up
@@ -234,18 +267,22 @@ reverse proxy to attach) keeps using it.
 ## Options
 
 ```
-workmux [options]
+workmux [options] [DIR…]
 
   -p, --port N       port to listen on (default 4315)
       --host ADDR    interface to bind (default 127.0.0.1)
       --token TOK    pin the token instead of minting one
-      --root DIR     repository to serve (default: the current directory)
+      --root DIR     repository to serve; repeatable, as are bare directories
+                     (default: the current directory)
+      --standalone   start a server of my own instead of joining one that is
+                     already running
       --no-terminal  dashboard only — don't serve shells
       --open         open a browser once it's listening
 ```
 
 Every flag has a `WORKMUX_*` environment variable (`WORKMUX_PORT`, `WORKMUX_HOST`,
-`WORKMUX_TOKEN`, `WORKMUX_ROOT`, `WORKMUX_TERMINAL=0`).
+`WORKMUX_TOKEN`, `WORKMUX_ROOT`, `WORKMUX_TERMINAL=0`). `WORKMUX_ROOT` takes a list
+separated the way `PATH` is: `WORKMUX_ROOT=~/code/trip1:~/code/homelab`.
 
 ## Reaching it from your phone
 
@@ -268,30 +305,45 @@ exempt, so nothing changes on the machine itself. `?t=…` is swapped for an
 The browser is one client; a mobile app is another. Everything the UI renders
 comes from the same JSON:
 
+Routes come in two shapes, and the shape says what a request is about. `/api/…` is
+about the server; `/api/p/{project}/…` is about one repository, with the project in
+the path so every such request is legible in a log and repeatable with curl.
+
 | endpoint | |
 | --- | --- |
-| `GET /api/work` | the whole dashboard: worktrees, agents, PRs, stacks, sessions, capabilities |
-| `GET /api/config` | the resolved project shape |
-| `GET /api/health` | liveness, outside the token check so a proxy can probe it |
-| `GET /api/session/list` | live sessions |
-| `POST /api/session/new` | `{kind, cwd, cols, rows}` — shell / agent / attach / logs / git, or `resume` for "this worktree's agent, whatever that is" |
+| `GET /api/work` | the whole dashboard: every project, and all of their work in one ordered list |
+| `GET /api/health` | liveness and identity, outside the token check so a proxy can probe it |
+| `GET /api/projects` | what is being served |
+| `POST /api/projects` | `{root}` starts serving a repository, `{id, remove:true}` stops — this is what a second `workmux` calls |
+| `GET /api/session/list` | live sessions, each naming the project it belongs to |
 | `POST /api/session/kill` | `{id}` |
 | `WS /api/session/socket/{id}` | binary frames are raw PTY bytes both ways; text frames are JSON control (`{"t":"size"}`, `{"t":"exit"}`) |
 | `POST /api/upload` | a pasted image; puts it on the host clipboard and returns the path |
-| `GET /api/changes` | `?path=&base=` — file status with line counts, plus the commits this branch has that its base doesn't |
-| `GET /api/diff` | `?path=&file=` for a file, `?path=&rev=` for a commit |
-| `POST /api/new` | `{prompt, name?, base?}` — a worktree, its files, and an agent on the task |
-| `POST /api/stack` | `{action, slot, path}` — up / restart / stop, through the project's own commands |
-| `POST /api/update` | `{path, base}` — merge the base branch in, aborting on conflict |
-| `POST /api/pr` | `{ref}` — check a PR out into its own worktree |
-| `GET /api/mcp`, `POST /api/mcp/add`, `/api/mcp/remove` | the agent's server registry, with reachability |
 | `GET /api/log` | this process's own log |
+
+| per project | |
+| --- | --- |
+| `GET /api/p/{id}/work` | one repository's own view |
+| `GET /api/p/{id}/config` | the resolved project shape |
+| `GET /api/p/{id}/changes` | `?path=&base=` — file status with line counts, plus the commits this branch has that its base doesn't |
+| `GET /api/p/{id}/diff` | `?path=&file=` for a file, `?path=&rev=` for a commit |
+| `GET /api/p/{id}/stacks` | what is running and what it costs |
+| `POST /api/p/{id}/session/new` | `{kind, cwd, cols, rows}` — shell / agent / attach / logs / git, or `resume` for "this worktree's agent, whatever that is" |
+| `POST /api/p/{id}/new` | `{prompt, name?, base?}` — a worktree, its files, and an agent on the task |
+| `POST /api/p/{id}/stack` | `{action, slot, path}` — up / restart / stop, through the project's own commands |
+| `POST /api/p/{id}/update` | `{path, base}` — merge the base branch in, aborting on conflict |
+| `POST /api/p/{id}/pr` | `{ref}` — check a PR out into its own worktree |
+| `GET /api/p/{id}/mcp`, `POST …/mcp/add`, `…/mcp/remove` | the agent's server registry, with reachability |
+
+A project id is its name, lowercased and made path-safe, unique within the server —
+`trip1`, `homelab`. Two projects that would collide get `-2`.
 
 Two rules the session API keeps, both server-side, because between them they're the
 difference between a dev tool and a remote shell for anyone who can reach the port:
-a session may only open in one of **this** repository's worktrees, and a WebSocket
-upgrade must come from an origin this instance is actually reachable at (CORS does
-not cover WebSockets).
+a session may only open in one of **that project's** worktrees — scoped to the
+project in the path, not to any repository the server happens to hold — and a
+WebSocket upgrade must come from an origin this instance is actually reachable at
+(CORS does not cover WebSockets).
 
 ## Roadmap
 

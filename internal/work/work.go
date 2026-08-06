@@ -54,8 +54,11 @@ type StackRef struct {
 	stack.State
 }
 
-// Item is one piece of work.
+// Item is one piece of work. Project says which repository it belongs to, because
+// one server serves several and a merged list is otherwise ambiguous — two repos
+// can easily have a branch of the same name.
 type Item struct {
+	Project   string         `json:"project"`
 	Path      string         `json:"path"`
 	Dir       string         `json:"dir"`
 	Branch    string         `json:"branch"`
@@ -85,32 +88,52 @@ type AgentCaps struct {
 	MCP    bool   `json:"mcp"`
 }
 
-// View is the whole dashboard payload.
-type View struct {
+// Project is one repository, without its work: everything a client needs to render
+// the right affordances for it. Held apart from the items so a merged list can
+// carry many projects' work and still say what each one can do.
+type Project struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
 	Root         string    `json:"root"`
 	Base         string    `json:"base"`
-	Work         []Item    `json:"work"`
-	Name         string    `json:"name"`
 	StackEnabled bool      `json:"stack_enabled"`
 	RepoURL      string    `json:"repo_url"`
 	OpenPRs      []prs.PR  `json:"open_prs"`
 	NextSlot     string    `json:"next_slot"`
 	Profiles     string    `json:"profiles"`
-	Terminal     bool      `json:"terminal"`
 	Agent        AgentCaps `json:"agent"`
+}
+
+// View is one project and its work.
+type View struct {
+	Project
+	Work []Item `json:"work"`
+}
+
+// Overview is every project this server holds, with all of their work in one list.
+//
+// One list rather than one per project on purpose: the ordering is what the
+// dashboard is for, and "what wants me right now" doesn't stop at a repository
+// boundary. Each item names its project, so a client can group or filter.
+type Overview struct {
+	Projects []Project `json:"projects"`
+	Work     []Item    `json:"work"`
+	Terminal bool      `json:"terminal"`
 	// Build fingerprints the frontend this server serves, so a page can notice it is
 	// older than the server and stop you debugging a bug that's already fixed.
 	Build string `json:"build"`
 }
 
-// Builder assembles the view. It holds the readers so their caches survive polls.
+// Builder assembles one project's view. It holds the readers so their caches
+// survive polls.
 type Builder struct {
-	Cfg      *config.Config
-	Agents   *agents.Reader
-	Terminal bool
-	// BuildID is the frontend fingerprint, passed through to the view.
-	BuildID string
-	// Sessions returns the live sessions; nil while the terminal layer is off.
+	// ID is the project this builder is for; every item it produces carries it.
+	ID     string
+	Cfg    *config.Config
+	Agents *agents.Reader
+	// Sessions returns the live sessions of the whole server. Items keep only the
+	// ones opened in their own worktree, and worktree paths are unique across
+	// projects, so an unfiltered list is the right input.
 	Sessions func() []Session
 }
 
@@ -236,7 +259,8 @@ func (b *Builder) Build() View {
 		}
 
 		items = append(items, Item{
-			Path: w.Path, Dir: w.Dir, Branch: branch,
+			Project: b.ID,
+			Path:    w.Path, Dir: w.Dir, Branch: branch,
 			IsDefault: w.Path == root,
 			PR:        pr, PRs: prNums, Base: itemBase,
 			Activity: lastActivity(w.Path, mine), Live: live,
@@ -264,15 +288,46 @@ func (b *Builder) Build() View {
 
 	a := cfg.Agent
 	return View{
-		Root: root, Base: base, Work: items, Name: cfg.Name,
-		StackEnabled: cfg.HasStack(), RepoURL: gitx.WebURL(root),
-		OpenPRs: unchecked, NextSlot: stack.NextFreeSlot(cfg, running),
-		Profiles: cfg.Profiles(), Terminal: b.Terminal, Build: b.BuildID,
-		Agent: AgentCaps{
-			Name: nameOr(a.Name, "agent"), Run: a.Command != "", Spawn: a.Spawn != "",
-			Attach: a.Attach != "", Jobs: cfg.JobsDir() != "", MCP: a.MCP != "",
+		Project: Project{
+			ID: b.ID, Name: cfg.Name, Root: root, Base: base,
+			StackEnabled: cfg.HasStack(), RepoURL: gitx.WebURL(root),
+			OpenPRs: unchecked, NextSlot: stack.NextFreeSlot(cfg, running),
+			Profiles: cfg.Profiles(),
+			Agent: AgentCaps{
+				Name: nameOr(a.Name, "agent"), Run: a.Command != "", Spawn: a.Spawn != "",
+				Attach: a.Attach != "", Jobs: cfg.JobsDir() != "", MCP: a.MCP != "",
+			},
 		},
+		Work: items,
 	}
+}
+
+// Merge reads every project at once and puts their work in a single ordered list.
+//
+// Concurrently, because each project is a fistful of git and docker round trips and
+// they have no reason to wait for one another: three repos should cost what the
+// slowest one costs, not the sum. The ordering is then applied across the merged
+// list, so a blocked agent in one repo outranks a quiet worktree in another —
+// which is the whole reason for serving them together.
+func Merge(builders []*Builder, terminal bool, build string) Overview {
+	out := Overview{Projects: []Project{}, Work: []Item{}, Terminal: terminal, Build: build}
+	views := make([]View, len(builders))
+	var wg sync.WaitGroup
+	for i, b := range builders {
+		wg.Add(1)
+		go func(i int, b *Builder) {
+			defer wg.Done()
+			views[i] = b.Build()
+		}(i, b)
+	}
+	wg.Wait()
+	for _, v := range views {
+		out.Projects = append(out.Projects, v.Project)
+		out.Work = append(out.Work, v.Work...)
+	}
+	sort.SliceStable(out.Work, func(i, j int) bool { return out.Work[i].Activity > out.Work[j].Activity })
+	sort.SliceStable(out.Work, func(i, j int) bool { return out.Work[i].Rank < out.Work[j].Rank })
+	return out
 }
 
 type drift struct{ behind, ahead int }

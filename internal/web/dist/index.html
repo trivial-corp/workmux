@@ -38,7 +38,15 @@ header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12
          height:46px; border-bottom:1px solid var(--line); background:var(--panel); }
 .brand { font-family:var(--mono); font-size:13px; letter-spacing:-0.01em; white-space:nowrap;
          display:flex; align-items:baseline; gap:5px; flex:0 0 auto; }
-.brand .proj { font-weight:600; color:var(--t1); }
+.brand .proj { font-weight:600; color:var(--t1); font:inherit; font-weight:600;
+               background:none; border:0; padding:2px 5px; margin-left:-5px; border-radius:5px;
+               cursor:pointer; display:flex; align-items:baseline; gap:5px; }
+.brand .proj:hover { background:var(--elev-2); }
+.brand .proj .caret { border-left:0; padding-left:0; margin-left:0; }
+/* Which repo a row belongs to. Only drawn when there is more than one, so a
+   single-project server looks exactly as it did. */
+.strip .pj { font-family:var(--mono); font-size:10px; color:var(--t3); padding:1px 5px;
+             border:1px solid var(--line); border-radius:4px; white-space:nowrap; }
 .brand .tool { color:var(--t3); font-size:11px; }
 .stats { display:flex; gap:0; align-items:center; flex:1 1 auto; overflow:hidden;
          font-family:var(--mono); font-size:11px; color:var(--t3); }
@@ -351,7 +359,8 @@ body.full main .pane { display:flex; }
 
 <div id="loading"></div>
 <header>
-  <div class="brand"><span class="proj" id="proj">…</span><span class="tool">workmux</span></div>
+  <div class="brand"><button class="proj" id="proj" data-menu
+      title="Which repositories this server is holding">…</button><span class="tool">workmux</span></div>
   <div class="stats" id="stats"></div>
   <div class="acts">
     <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
@@ -408,6 +417,57 @@ const $ = (id) => document.getElementById(id);
 let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null;
 const PANES = new Map();   // session id → {term, fit, ws, dead}
 
+// ---- projects ----
+//
+// One server holds several repositories and the work list merges them, so nearly
+// every request has to say which one it is about. Two pieces of state do that: the
+// filter, which is what you are looking at, and the current project, which is what
+// a button would act on. They are not the same — with the filter off you are
+// looking at everything but still acting on the work you have selected.
+
+let PROJECTS = {};                 // id → project, from the last poll
+let FILTER = null;                 // project id, or null for "all of them"
+const FILTER_KEY = "workmux.filter";
+try { FILTER = localStorage.getItem(FILTER_KEY) || null; } catch {}
+
+const projects = () => (STATE && STATE.projects) || [];
+const multi = () => projects().length > 1;
+
+// The project a button acts on: the one the selected work belongs to, else the one
+// you have filtered to, else the first. Selecting a row is how you switch, which
+// means you never have to think about this.
+function curProject() {
+  const w = selected();
+  if (w && PROJECTS[w.project]) return PROJECTS[w.project];
+  if (FILTER && PROJECTS[FILTER]) return PROJECTS[FILTER];
+  return projects()[0] || {};
+}
+const curId = () => curProject().id || "";
+// The project a particular piece of work belongs to — never assume it is the
+// current one, or a two-repo dashboard shows the wrong base branch on half its rows.
+const projOf = (w) => (w && PROJECTS[w.project]) || curProject();
+const caps = (w) => (w ? projOf(w) : curProject()).agent || {};
+
+// Every project-scoped URL goes through here, so there is one place that knows the
+// shape and no call site can forget the id.
+const api = (path, id) => "/api/p/" + encodeURIComponent(id || curId()) + path;
+
+const visible = () => FILTER ? WORK.filter(w => w.project === FILTER) : WORK;
+
+function setFilter(id) {
+  FILTER = id;
+  try { id ? localStorage.setItem(FILTER_KEY, id) : localStorage.removeItem(FILTER_KEY); } catch {}
+  // The selection has to survive into what is now on screen, or the pane is showing
+  // a worktree the list no longer has.
+  const shown = visible();
+  if (!shown.some(w => w.path === SEL)) {
+    SEL = (shown[0] || {}).path || null;
+    ACTIVE = null; CH = null; CHFILE = null; CHREV = null;
+  }
+  SIG = null;
+  poll(true);
+}
+
 // ---- work ----
 
 let POLLING = 0;
@@ -430,8 +490,9 @@ function loading(on) {
 // seconds.
 function signature(d) {
   return JSON.stringify([
-    d.name, d.base, d.next_slot, d.stack_enabled, d.terminal,
-    (d.work || []).map(w => [w.path, w.branch, w.tempo, w.live, w.behind, w.ahead, w.rank,
+    FILTER, d.terminal,
+    (d.projects || []).map(p => [p.id, p.name, p.base, p.next_slot, p.stack_enabled]),
+    (d.work || []).map(w => [w.project, w.path, w.branch, w.tempo, w.live, w.behind, w.ahead, w.rank,
       w.prs, w.stack && [w.stack.slot, w.stack.up, w.stack.total],
       (w.agents || []).map(a => [a.id, a.name, a.tempo, a.detail]),
       (w.sessions || []).map(s => [s.id, s.alive])]),
@@ -454,20 +515,39 @@ async function poll(userAsked) {
     return;
   }
   STATE = d; WORK = d.work || [];
-  // One instance per project is the normal case, so the tab has to say which. The
-  // project comes first because titles truncate from the right.
-  document.title = d.name ? d.name + " · workmux" : "workmux";
-  $("proj").textContent = d.name || "workmux";
+  PROJECTS = {};
+  for (const p of d.projects || []) PROJECTS[p.id] = p;
+  // A filter pointing at a project that has been removed is a list that can only be
+  // empty, which reads as the server being broken.
+  if (FILTER && !PROJECTS[FILTER]) FILTER = null;
+
+  // The tab has to say what you are looking at, and it truncates from the right, so
+  // the answer goes first.
+  const here = FILTER ? PROJECTS[FILTER].name
+             : multi() ? projects().length + " projects"
+             : (projects()[0] || {}).name || "workmux";
+  document.title = here + " · workmux";
+  const label = $("proj");
+  label.textContent = here;
+  if (multi()) label.append(el("span", "caret", "▾"));
+
+  const rows = visible();
   const stats = $("stats");
   stats.textContent = "";
   const chip = (t) => stats.append(el("span", null, t));
-  const wants = WORK.filter(w => w.tempo === "blocked").length;
-  const live = WORK.filter(w => w.live).length;
-  chip(WORK.length + " trees");
+  const wants = rows.filter(w => w.tempo === "blocked").length;
+  const live = rows.filter(w => w.live).length;
+  chip(rows.length + " trees");
   if (wants) chip(wants + " waiting");
   if (live) chip(live + " working");
-  chip(d.base);
-  if (d.stack_enabled) chip("next " + d.next_slot);
+  // A base branch and a next slot belong to one repository. Showing one project's
+  // while looking at all of them would be a number that is quietly about something
+  // else, so with the filter off they simply aren't there.
+  const one = FILTER ? PROJECTS[FILTER] : (multi() ? null : projects()[0]);
+  if (one) {
+    chip(one.base);
+    if (one.stack_enabled) chip("next " + one.next_slot);
+  }
   // The page you are looking at keeps running the JS it loaded. After an upgrade or a
   // restart that JS can be older than the server, and then you're debugging a bug that
   // was fixed an hour ago — so say so instead of letting it happen quietly.
@@ -475,8 +555,8 @@ async function poll(userAsked) {
     if (!BUILD) BUILD = d.build;
     else if (BUILD !== d.build) staleNotice();
   }
-  $("btn-mcp").hidden = !(d.agent && d.agent.mcp);
-  if (!SEL || !WORK.some(w => w.path === SEL)) SEL = (WORK[0] || {}).path || null;
+  $("btn-mcp").hidden = !caps().mcp;
+  if (!SEL || !rows.some(w => w.path === SEL)) SEL = (rows[0] || {}).path || null;
   const sig = signature(d);
   const changed = sig !== SIG;
   SIG = sig;
@@ -512,13 +592,14 @@ const BANDS = [
 function renderWork() {
   const list = $("list");
   list.textContent = "";
-  if (!WORK.length) {
+  const shown = visible();
+  if (!shown.length) {
     list.append(el("div", "hollow", "No worktrees yet."));
     return;
   }
   const taken = new Set();
   for (const band of BANDS) {
-    const rows = WORK.filter(w => {
+    const rows = shown.filter(w => {
       if (taken.has(w.path)) return false;
       const mine = band.key === "base" ? w.is_default : (!w.is_default && band.has(w));
       if (mine) taken.add(w.path);
@@ -545,6 +626,10 @@ function strip(w, tone) {
   // the agent talking about itself, and it renames itself as the work moves — which is
   // no way to find the one you were in an hour ago. So the card also says when that was.
   const head = el("div", "head");
+  // Branch names repeat across repositories — every one of them has a main — so a
+  // merged list has to say which. Filtered to one, the header already has, and
+  // repeating it on every row is a word you read forty times and never need.
+  if (multi() && !FILTER) head.append(el("span", "pj", projOf(w).name || w.project));
   head.append(el("div", "branch", w.branch));
   const seen = SEEN[w.path];
   if (seen) {
@@ -579,6 +664,8 @@ function strip(w, tone) {
 
   row.append(body);
   row.onclick = () => {
+    // No project switch needed: the current project follows the selection, so
+    // clicking work in another repo simply aims the buttons at that repo.
     SEL = w.path; ACTIVE = null; CHFILE = null; CHREV = null;
     markSeen(w.path);
     renderWork();
@@ -649,8 +736,7 @@ function showWork(mayStart) {
   ACTIVE = null;
   renderBar();
   const w = selected();
-  const caps = (STATE && STATE.agent) || {};
-  if (mayStart && w && w.agents && w.agents.length && caps.attach && AUTO !== SEL) {
+  if (mayStart && w && w.agents && w.agents.length && caps(w).attach && AUTO !== SEL) {
     AUTO = SEL;
     start("resume");
   }
@@ -749,7 +835,7 @@ function menu(anchor, items) {
 
 function sessionMenu(anchor, w, mine) {
   if (!w) return;
-  const caps = STATE.agent || {};
+  const can = caps(w);
   const items = [];
   for (const s of mine) {
     items.push({ label: sessionLabel(s, w), hint: s.id === ACTIVE ? "open" : "", on: s.id === ACTIVE,
@@ -757,10 +843,10 @@ function sessionMenu(anchor, w, mine) {
   }
   if (mine.length) items.push({ sep: true });
   const attached = mine.some(s => s.kind === "attach");
-  if (w.agents.length && caps.attach && !attached) {
+  if (w.agents.length && can.attach && !attached) {
     items.push({ label: "Resume " + (w.agents[0].name || "the agent"), hint: "⌥R", go: () => start("resume") });
-  } else if (!w.agents.length && caps.run) {
-    items.push({ label: "Start " + (caps.name || "an agent"), go: () => start("agent") });
+  } else if (!w.agents.length && can.run) {
+    items.push({ label: "Start " + (can.name || "an agent"), go: () => start("agent") });
   }
   // Nothing here that already has a control of its own: Shell is a tab, git is the
   // Git menu, container logs sit with the containers. A second door to the same room
@@ -784,11 +870,12 @@ function gitMenu(anchor, w) {
   items.push({ label: "Fetch " + w.base, hint: "check for new commits", go: () => refreshDrift(w) });
   items.push({ sep: true });
   items.push({ label: "Open a git session", hint: "lazygit", go: () => start("git") });
-  if ((w.prs || []).length && STATE.repo_url) {
+  const repo = projOf(w).repo_url;
+  if ((w.prs || []).length && repo) {
     items.push({ sep: true });
     for (const n of w.prs.slice(0, 4)) {
       items.push({ label: "Pull request #" + n, hint: "github",
-                   go: () => window.open(STATE.repo_url + "/pull/" + n, "_blank") });
+                   go: () => window.open(repo + "/pull/" + n, "_blank") });
     }
   }
   menu(anchor, items);
@@ -798,7 +885,7 @@ async function mergeBase(w) {
   toast("Merging " + w.base + " into " + w.branch + "…");
   let r;
   try {
-    r = await (await fetch("/api/update", { method: "POST",
+    r = await (await fetch(api("/update", w.project), { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: SEL, base: w.base }) })).json();
   } catch { r = { error: "server unreachable" }; }
@@ -824,7 +911,6 @@ function renderBar() {
   }
   const w = selected();
   if (!w) return;
-  const caps = STATE.agent || {};
   const mine = SESSIONS.filter(s => s.cwd === SEL);
   const group = () => { const g = el("div", "group"); bar.append(g); return g; };
   const btn = (into, label, fn, opts) => {
@@ -843,7 +929,7 @@ function renderBar() {
 
   // Then the app, then the branch. Grouped, so a destructive button never sits next
   // to the one you press all the time.
-  if (STATE.stack_enabled) {
+  if (projOf(w).stack_enabled) {
     const g3 = group();
     if (w.stack) {
       if (w.stack.url) btn(g3, "↗ open", () => window.open(w.stack.url, "_blank"),
@@ -871,19 +957,21 @@ function sessionLabel(s, w) {
   if (s.kind === "attach") {
     const a = (w.agents || []).find(a => a.id === s.agent);
     if (a && a.name) return a.name;
-    return (STATE.agent && STATE.agent.name) || "agent";
+    return caps(w).name || "agent";
   }
   return s.title || s.kind;
 }
 
 async function stackAction(action, w) {
-  const slot = w.stack ? w.stack.slot : (STATE.next_slot || "");
+  const slot = w.stack ? w.stack.slot : (projOf(w).next_slot || "");
   toast(action === "up" ? "Starting " + slot + "…" : action + "ing " + slot + "…");
   let r;
   try {
-    r = await (await fetch("/api/stack", { method: "POST",
+    // The path goes to the project that owns it; slots are per-repository too, so
+    // sending this to the wrong one is refused rather than acted on.
+    r = await (await fetch(api("/stack", w.project), { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, slot, path: SEL }) })).json();
+      body: JSON.stringify({ action, slot, path: w.path || SEL }) })).json();
   } catch { r = { error: "server unreachable" }; }
   if (r.error) toast(r.error);
   else toast(action === "stop" ? slot + " stopped" : slot + " " + (action === "up" ? "started" : "restarted"));
@@ -912,8 +1000,9 @@ function showEmpty(existing) {
     fact("branch", w.branch);
     fact("base", w.base + (w.behind > 0 ? "  ⇣" + w.behind : "") + (w.ahead > 0 ? "  ⇡" + w.ahead : ""));
     for (const a of w.agents || []) fact("agent", (a.name || a.id) + (a.tempo ? "  " + a.tempo : ""));
+    if (multi()) fact("project", projOf(w).name || w.project);
     if (w.stack) fact("app", w.stack.slot + "  " + w.stack.up + "/" + w.stack.total + " up");
-    else if (STATE && STATE.stack_enabled) fact("app", "not running");
+    else if (projOf(w).stack_enabled) fact("app", "not running");
     if ((w.prs || []).length) fact("prs", w.prs.map(n => "#" + n).join("  "));
     fact("path", w.path.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"));
     box.append(facts);
@@ -925,7 +1014,7 @@ async function start(kind) {
   const size = fitSize();
   let r;
   try {
-    r = await (await fetch("/api/session/new", {
+    r = await (await fetch(api("/session/new", (selected() || {}).project), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind, cwd: SEL, cols: size.cols, rows: size.rows }),
     })).json();
@@ -1398,7 +1487,7 @@ async function loadChanges(force, userAsked) {
   if (!force && CH && CH.for === SEL) return renderChanges();
   if (userAsked) loading(true);
   try {
-    const d = await (await fetch("/api/changes?path=" + encodeURIComponent(SEL)
+    const d = await (await fetch(api("/changes", w.project) + "?path=" + encodeURIComponent(SEL)
       + "&base=" + encodeURIComponent(w.base || ""))).json();
     CH = d; CH.for = SEL;
   } catch { CH = null; }
@@ -1466,7 +1555,7 @@ async function showFileDiff(f) {
   renderChanges();
   let d;
   try {
-    d = await (await fetch("/api/diff?path=" + encodeURIComponent(SEL)
+    d = await (await fetch(api("/diff", (selected() || {}).project) + "?path=" + encodeURIComponent(SEL)
       + "&file=" + encodeURIComponent(f.path) + (f.staged ? "&staged=1" : ""))).json();
   } catch { d = { error: "could not read the diff" }; }
   paintDiff(f.path, d.diff, d.error);
@@ -1477,7 +1566,7 @@ async function showCommitDiff(c) {
   renderChanges();
   let d;
   try {
-    d = await (await fetch("/api/diff?path=" + encodeURIComponent(SEL)
+    d = await (await fetch(api("/diff", (selected() || {}).project) + "?path=" + encodeURIComponent(SEL)
       + "&rev=" + encodeURIComponent(c.sha))).json();
   } catch { d = { error: "could not read the commit" }; }
   paintDiff(c.sha + "  " + c.msg, d.diff, d.error);
@@ -1588,6 +1677,70 @@ function paintDiff(title, diff, error) {
   body.append(box);
 }
 
+// ---- projects ----
+//
+// The switcher is a filter, not a mode: with it off you see every repository's work
+// in one ordered list, which is the reason for serving them together at all. What it
+// changes is what you are looking at, never what a button would do.
+
+function projectMenu(anchor) {
+  const items = [];
+  if (multi()) {
+    items.push({ label: "All projects", hint: WORK.length + " trees", on: !FILTER,
+                 go: () => setFilter(null) });
+    for (const p of projects()) {
+      const mine = WORK.filter(w => w.project === p.id);
+      const wants = mine.filter(w => w.tempo === "blocked").length;
+      items.push({
+        label: p.name, on: FILTER === p.id,
+        hint: wants ? wants + " waiting" : mine.length + " trees",
+        go: () => setFilter(p.id),
+      });
+    }
+    items.push({ sep: true });
+  }
+  items.push({ label: "＋ Add a repository…", hint: "or run workmux in it", go: addProject });
+  const here = curProject();
+  if (multi() && here.id) {
+    items.push({ label: "Stop serving " + here.name, danger: true,
+                 go: () => removeProject(here) });
+  }
+  menu(anchor, items);
+}
+
+// Adding one from the page is the same call `workmux` makes from another checkout,
+// so there is one way a project arrives and not two.
+async function addProject() {
+  const dir = prompt("Path to a git repository:", "");
+  if (!dir) return;
+  let r;
+  try {
+    r = await (await fetch("/api/projects", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: dir }) })).json();
+  } catch { r = { error: "server unreachable" }; }
+  if (r.error) { toast(r.error); return; }
+  toast(r.added ? "Now serving " + r.name : r.name + " was already here");
+  setFilter(r.id);
+}
+
+// Its sessions go with it — a shell in a worktree of a repo the server has stopped
+// holding is a process nobody has a route to — so say how many before doing it.
+async function removeProject(p) {
+  const open = SESSIONS.filter(s => s.project === p.id && s.alive).length;
+  const cost = open ? "\n\n" + open + " open session" + (open === 1 ? "" : "s") + " will be closed." : "";
+  if (!confirm("Stop serving " + p.name + "?" + cost)) return;
+  let r;
+  try {
+    r = await (await fetch("/api/projects", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: p.id, remove: true }) })).json();
+  } catch { r = { error: "server unreachable" }; }
+  if (r.error) { toast(r.error); return; }
+  toast("Stopped serving " + p.name);
+  setFilter(null);
+}
+
 // ---- sheets: new work, mcp, the log ----
 
 let SHEET = null;
@@ -1614,6 +1767,22 @@ function renderNew() {
   $("stitle").textContent = "New work";
   const body = $("sbody"), foot = $("sfoot");
   body.textContent = ""; foot.textContent = "";
+  // Which repository this lands in. Defaulted to the one you're working in, and
+  // only shown when there is a choice to make.
+  let target = curId();
+  if (multi()) {
+    const l = el("label", null, "Repository");
+    const sel = el("select");
+    for (const p of projects()) {
+      const o = el("option", null, p.name);
+      o.value = p.id;
+      if (p.id === target) o.selected = true;
+      sel.append(o);
+    }
+    sel.onchange = () => { target = sel.value; base.placeholder = (PROJECTS[target] || {}).base || "main"; };
+    l.append(sel);
+    body.append(l);
+  }
   // No branch name asked for: it comes from what you wrote. Needing to invent one
   // before starting is exactly the friction that stops people branching.
   const task = el("label", null, "What needs doing? The branch name comes from this.");
@@ -1624,7 +1793,7 @@ function renderNew() {
   const name = el("input"); name.placeholder = "derived from the task";
   nameLbl.append(name);
   const baseLbl = el("label", null, "Base branch");
-  const base = el("input"); base.placeholder = (STATE && STATE.base) || "main";
+  const base = el("input"); base.placeholder = (PROJECTS[target] || {}).base || "main";
   baseLbl.append(base);
   const note = el("div", "note",
     "It branches off the remote, copies the gitignored files a worktree needs, starts an agent, "
@@ -1649,13 +1818,16 @@ function renderNew() {
     go.disabled = true; status.textContent = "creating…";
     let r;
     try {
-      r = await (await fetch("/api/new", { method: "POST",
+      r = await (await fetch(api("/new", target), { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.value, prompt: ta.value, base: base.value }) })).json();
     } catch { r = { error: "server unreachable" }; }
     go.disabled = false;
     if (r.error) { status.textContent = r.error; return; }
     closeSheet();
+    // New work in a repository you had filtered away must still be what you land
+    // on — you just asked for it.
+    if (FILTER && FILTER !== target) setFilter(target);
     SEL = r.path; CH = null;
     await poll();
     setSurface("session");
@@ -1665,16 +1837,18 @@ function renderNew() {
 }
 
 async function renderMcp(refresh) {
-  $("stitle").textContent = "MCP servers";
+  const where = curProject();
+  $("stitle").textContent = multi() ? "MCP servers · " + (where.name || "") : "MCP servers";
   const body = $("sbody"), foot = $("sfoot");
   body.textContent = ""; foot.textContent = "";
   body.append(el("div", "hollow", el("p", null, "checking…")));
   let d;
-  try { d = await (await fetch("/api/mcp" + (refresh ? "?refresh=1" : ""))).json(); }
+  try { d = await (await fetch(api("/mcp", where.id) + (refresh ? "?refresh=1" : ""))).json(); }
   catch { d = { servers: [] }; }
   body.textContent = "";
   if (!d.enabled) {
-    body.append(el("div", "hollow", el("p", null, "This project has no mcp command configured.")));
+    body.append(el("div", "hollow", el("p", null,
+      (where.name || "This project") + " has no mcp command configured.")));
     return;
   }
   const servers = d.servers || [];
@@ -1706,7 +1880,7 @@ async function renderMcp(refresh) {
     rm.onclick = async () => {
       if (!confirm("Remove MCP server " + x.name + (x.scope ? " (" + x.scope + ")" : "") + "?")) return;
       const scope = (x.scope || "").startsWith("local") ? "local" : x.scope;
-      await fetch("/api/mcp/remove", { method: "POST",
+      await fetch(api("/mcp/remove", where.id), { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: x.name, scope }) }).catch(() => {});
       renderMcp(true);
@@ -1756,7 +1930,7 @@ function renderMcpAdd() {
     const lines = (v) => v.split("\n").map(x => x.trim()).filter(Boolean);
     let r;
     try {
-      r = await (await fetch("/api/mcp/add", { method: "POST",
+      r = await (await fetch(api("/mcp/add"), { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: f.name.value, target: f.target.value,
           transport: f.transport.value, scope: f.scope.value,
@@ -1804,6 +1978,8 @@ function renderMore() {
   const body = $("sbody"), foot = $("sfoot");
   body.className = "sbody"; body.textContent = ""; foot.textContent = "";
   const items = [
+    ["Projects", multi() ? projects().length + " repositories on this server"
+                         : "Add another repository", () => { closeSheet(); projectMenu($("proj")); }],
     ["Stacks", "What is running and what it costs", () => openSheet("stacks")],
     ["MCP servers", "Which servers an agent can reach", () => openSheet("mcp")],
     ["Server log", "What this instance has been doing", () => openSheet("log")],
@@ -1832,14 +2008,16 @@ function upFor(epoch) {
 }
 
 async function renderStacks(quiet) {
-  $("stitle").textContent = "Stacks";
+  const where = curProject();
+  $("stitle").textContent = multi() ? "Stacks · " + (where.name || "") : "Stacks";
   const body = $("sbody"), foot = $("sfoot");
   if (!quiet) {
     body.textContent = ""; foot.textContent = "";
     body.append(el("div", "hollow", el("p", null, "asking docker…")));
   }
   let d;
-  try { d = await (await fetch("/api/stacks")).json(); } catch { d = { enabled: false, error: 1 }; }
+  try { d = await (await fetch(api("/stacks", where.id))).json(); }
+  catch { d = { enabled: false, error: 1 }; }
   if (SHEET !== "stacks") return;              // you closed it while docker was thinking
   body.textContent = ""; foot.textContent = "";
 
@@ -1854,7 +2032,8 @@ async function renderStacks(quiet) {
     if (sub) c.append(el("div", "s", sub));
     sum.append(c);
   };
-  cell("stacks", String(stacks.length), stacks.length ? "of this repo" : "none running");
+  cell("stacks", String(stacks.length),
+       stacks.length ? "of " + (curProject().name || "this repo") : "none running");
   cell("cpu", (m.cpu || 0).toFixed(0) + "%", "of one core · " + (m.containers || 0) + " containers");
   cell("memory", gb(m.mem_bytes || 0), m.mem_total ? "of " + gb(m.mem_total) + " docker has" : "");
   if (m.others) cell("not yours", String(m.others), "containers from elsewhere");
@@ -1896,11 +2075,14 @@ async function renderStacks(quiet) {
       b.onclick = fn;
       row.append(b);
     };
-    act("restart", async () => { await stackAction("restart", w || { stack: s }); renderStacks(true); });
-    act("stop", async () => { await stackAction("stop", w || { stack: s }); renderStacks(true); },
+    const on = w || { stack: s, project: where.id, path: s.path };
+    act("restart", async () => { await stackAction("restart", on); renderStacks(true); });
+    act("stop", async () => { await stackAction("stop", on); renderStacks(true); },
         "Frees the slot and the memory it is holding");
     if (w) act("go to work", () => {
-      closeSheet(); SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
+      closeSheet();
+      if (FILTER && FILTER !== w.project) setFilter(w.project);
+      SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
     });
     card.append(row);
     body.append(card);
@@ -1926,7 +2108,7 @@ function stackSetup(body) {
   snip.textContent = JSON.stringify({
     stack: {
       compose: "docker-compose.yml",
-      slots: ((STATE && STATE.name) || "app") + "{n}",
+      slots: (curProject().name || "app") + "{n}",
       url: "http://{slot}.localhost",
     },
   }, null, 2);
@@ -2008,6 +2190,9 @@ if (window.visualViewport) {
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
 wireMouse();
+// The brand is the project switcher. Wired here rather than inline, because the
+// menu it opens is built from state the page hasn't loaded yet at parse time.
+$("proj").onclick = () => projectMenu($("proj"));
 poll(true);
 // Six seconds, and nothing at all while the tab is in the background — a dashboard
 // nobody is looking at doesn't need to ask.

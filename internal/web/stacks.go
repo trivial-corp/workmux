@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/stack"
 )
 
@@ -31,15 +32,16 @@ type StacksView struct {
 // `docker stats` has to watch every container for a moment before it can report a rate,
 // so it costs about a second — worth paying when someone is looking at the panel, not
 // every six seconds on a poll that the rest of the dashboard is waiting for.
-func (s *Server) handleStacks(w http.ResponseWriter, r *http.Request) {
-	view := StacksView{Enabled: s.Cfg.HasStack(), Stacks: []StackRow{}}
+func handleStacks(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	cfg := p.Cfg
+	view := StacksView{Enabled: cfg.HasStack(), Stacks: []StackRow{}}
 	if !view.Enabled {
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
 
-	running := stack.Running(s.Cfg)
-	view.NextSlot = stack.NextFreeSlot(s.Cfg, running)
+	running := stack.Running(cfg)
+	view.NextSlot = stack.NextFreeSlot(cfg, running)
 
 	// The per-stack read and the machine-wide stats are independent docker round trips.
 	var (
@@ -50,14 +52,14 @@ func (s *Server) handleStacks(w http.ResponseWriter, r *http.Request) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		usage, view.Machine = stack.Stats(s.Cfg)
+		usage, view.Machine = stack.Stats(cfg)
 	}()
-	for i, p := range running {
+	for i, proj := range running {
 		wg.Add(1)
-		go func(i int, p stack.Project) {
+		go func(i int, proj stack.Project) {
 			defer wg.Done()
-			states[i] = stack.Read(p, s.Cfg)
-		}(i, p)
+			states[i] = stack.Read(proj, cfg)
+		}(i, proj)
 	}
 	wg.Wait()
 
@@ -65,10 +67,10 @@ func (s *Server) handleStacks(w http.ResponseWriter, r *http.Request) {
 	// "nothing is running" reads very differently from "docker isn't there".
 	view.Docker = len(running) > 0 || view.Machine.Containers > 0
 
-	for i, p := range running {
+	for i, proj := range running {
 		view.Stacks = append(view.Stacks, StackRow{
-			Slot: p.Slot, Path: p.Dir, URL: s.Cfg.StackURL(p.Slot),
-			State: states[i], Usage: usage[p.Slot],
+			Slot: proj.Slot, Path: proj.Dir, URL: cfg.StackURL(proj.Slot),
+			State: states[i], Usage: usage[proj.Slot],
 		})
 	}
 	sort.Slice(view.Stacks, func(i, j int) bool { return view.Stacks[i].Slot < view.Stacks[j].Slot })

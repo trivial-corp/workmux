@@ -18,11 +18,52 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.port != 4315 || o.host != "127.0.0.1" || o.root != "." {
+	if o.port != 4315 || o.host != "127.0.0.1" || len(o.roots) != 0 {
 		t.Errorf("defaults = %+v", o)
 	}
-	if o.noTerm || o.open || o.tokenSet {
+	if o.noTerm || o.open || o.tokenSet || o.standalone {
 		t.Errorf("defaults = %+v", o)
+	}
+	// No root given means "here", resolved later — the parser leaves it empty so
+	// the environment still gets a say.
+	if got := resolveRoots(o.roots); len(got) != 1 {
+		t.Errorf("resolveRoots(nil) = %v, want one root", got)
+	}
+}
+
+// Several repositories in one server is the ordinary case, so both ways of asking
+// for them have to work — and an explicit root replaces the environment rather
+// than piling onto it.
+func TestSeveralRoots(t *testing.T) {
+	reset()
+	o, err := parseArgs([]string{"--root", "/tmp/a", "--root=/tmp/b", "/tmp/c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.roots) != 3 || o.roots[0] != "/tmp/a" || o.roots[2] != "/tmp/c" {
+		t.Errorf("roots = %v", o.roots)
+	}
+
+	reset()
+	defer reset()
+	os.Setenv("WORKMUX_ROOT", "/tmp/from-env")
+	if o, err = parseArgs(nil); err != nil || len(o.roots) != 1 || o.roots[0] != "/tmp/from-env" {
+		t.Errorf("environment root: %+v %v", o, err)
+	}
+	if o, err = parseArgs([]string{"--root", "/tmp/flag"}); err != nil ||
+		len(o.roots) != 1 || o.roots[0] != "/tmp/flag" {
+		t.Errorf("a flag must replace the environment, not add to it: %+v %v", o, err)
+	}
+}
+
+// The same repository named twice — by flag and by the directory you're in — is
+// one project, not two.
+func TestRootsAreDeduplicated(t *testing.T) {
+	reset()
+	dir := t.TempDir()
+	got := resolveRoots([]string{dir, dir})
+	if len(got) != 1 {
+		t.Errorf("resolveRoots = %v, want one", got)
 	}
 }
 
@@ -80,6 +121,7 @@ func TestEmptyTokenIsStillSet(t *testing.T) {
 func TestBadInput(t *testing.T) {
 	for _, argv := range [][]string{
 		{"--nope"},
+		{"-x"},
 		{"--port"},          // missing value
 		{"--port", "abc"},   // not a number
 		{"--port", "70000"}, // out of range

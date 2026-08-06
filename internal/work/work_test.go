@@ -75,9 +75,9 @@ func TestBuildOrdersWorkAndAttachesAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := &Builder{
-		Cfg:      cfg,
-		Agents:   &agents.Reader{JobsDir: jobs}, // no Process: don't scan the machine
-		Terminal: true,
+		ID:     "proj",
+		Cfg:    cfg,
+		Agents: &agents.Reader{JobsDir: jobs}, // no Process: don't scan the machine
 		Sessions: func() []Session {
 			return []Session{{ID: "1", Kind: "shell", CWD: quiet, Alive: true},
 				{ID: "2", Kind: "shell", CWD: "/elsewhere", Alive: true}}
@@ -87,6 +87,13 @@ func TestBuildOrdersWorkAndAttachesAgents(t *testing.T) {
 
 	if v.Name != "proj" || v.Base != "main" {
 		t.Errorf("name/base = %q/%q", v.Name, v.Base)
+	}
+	// Every item says which project it came from: one server merges several, and a
+	// branch name alone doesn't identify a worktree any more.
+	for _, w := range v.Work {
+		if w.Project != "proj" {
+			t.Errorf("item %q has project %q", w.Branch, w.Project)
+		}
 	}
 	if v.StackEnabled {
 		t.Error("no compose file → stack disabled")

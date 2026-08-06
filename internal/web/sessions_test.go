@@ -4,39 +4,54 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/trivial-corp/workmux/internal/agents"
-	"github.com/trivial-corp/workmux/internal/config"
-	"github.com/trivial-corp/workmux/internal/presets"
+	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/testrepo"
 	"github.com/trivial-corp/workmux/internal/work"
 )
 
-// withSessions builds a server that hands out terminals in one real worktree.
+// withSessions builds a server that hands out terminals in one real repository.
 func withSessions(t *testing.T) (*Server, http.Handler, string, *term.Registry) {
 	t.Helper()
 	r := testrepo.New(t, "proj")
-	cfg, err := config.Load(r.Root)
+	set, err := project.New([]string{r.Root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reg := term.NewRegistry()
 	t.Cleanup(reg.Shutdown)
-	p := presets.Deps{Cfg: cfg}
 	s := &Server{
-		Cfg:     cfg,
-		Builder: &work.Builder{Cfg: cfg, Agents: &agents.Reader{}, Terminal: true},
-		Origins: []string{"http://127.0.0.1:4315"},
-		Sessions: &Sessions{
-			Reg:      reg,
-			Presets:  p.Spec,
-			KnownDir: func(dir string) bool { return dir == r.Root },
-		},
+		Projects: set,
+		Terminal: true,
+		Origins:  []string{"http://127.0.0.1:4315"},
+		Sessions: &Sessions{Reg: reg},
 	}
 	return s, s.Handler(), r.Root, reg
+}
+
+// agentIn writes an agent's state where the project's reader will find it, which
+// is how the server learns an agent lives in a worktree. Real state on disk rather
+// than a stub: that read is the thing being tested.
+func agentIn(t *testing.T, s *Server, id, cwd string) {
+	t.Helper()
+	jobs := t.TempDir()
+	dir := filepath.Join(jobs, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"claude","tempo":"active","updatedAt":"2026-08-04T10:00:00Z","cwd":"` + cwd + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := s.Projects.First()
+	p.Agents = &agents.Reader{JobsDir: jobs}
+	p.Builder.Agents = p.Agents
 }
 
 func post(t *testing.T, h http.Handler, path string, body any) (int, map[string]any) {
@@ -54,7 +69,7 @@ func post(t *testing.T, h http.Handler, path string, body any) (int, map[string]
 func TestSessionLifecycle(t *testing.T) {
 	_, h, root, reg := withSessions(t)
 
-	code, got := post(t, h, "/api/session/new", map[string]any{
+	code, got := post(t, h, "/api/p/proj/session/new", map[string]any{
 		"kind": "shell", "cwd": root, "cols": 100, "rows": 30})
 	if code != 200 {
 		t.Fatalf("new = %d %v", code, got)
@@ -93,7 +108,7 @@ func TestSessionLifecycle(t *testing.T) {
 func TestSessionRefusesForeignDirectories(t *testing.T) {
 	_, h, _, _ := withSessions(t)
 	for _, dir := range []string{"/etc", "/", "", "/tmp"} {
-		code, got := post(t, h, "/api/session/new", map[string]any{"kind": "shell", "cwd": dir})
+		code, got := post(t, h, "/api/p/proj/session/new", map[string]any{"kind": "shell", "cwd": dir})
 		if code == 200 {
 			t.Errorf("%q was accepted: %v", dir, got)
 		}
@@ -107,18 +122,16 @@ func TestSessionRefusesForeignDirectories(t *testing.T) {
 func TestSessionKindUnavailable(t *testing.T) {
 	r := testrepo.New(t, "noagent")
 	r.Write("workmux.json", `{"agent": null}`)
-	cfg, err := config.Load(r.Root)
+	set, err := project.New([]string{r.Root})
 	if err != nil {
 		t.Fatal(err)
 	}
 	reg := term.NewRegistry()
 	defer reg.Shutdown()
-	p := presets.Deps{Cfg: cfg}
-	s := &Server{Cfg: cfg, Builder: &work.Builder{Cfg: cfg, Agents: &agents.Reader{}},
-		Sessions: &Sessions{Reg: reg, Presets: p.Spec, KnownDir: func(string) bool { return true }}}
+	s := &Server{Projects: set, Terminal: true, Sessions: &Sessions{Reg: reg}}
 	h := s.Handler()
 
-	code, got := post(t, h, "/api/session/new", map[string]any{"kind": "agent", "cwd": r.Root})
+	code, got := post(t, h, "/api/p/noagent/session/new", map[string]any{"kind": "agent", "cwd": r.Root})
 	if code == 200 {
 		t.Fatalf("an agent session was started for a project with no agent: %v", got)
 	}
@@ -133,10 +146,9 @@ func TestSessionKindUnavailable(t *testing.T) {
 // resume is a question answered by the server, so the answer is the same from the
 // dock, a keystroke or curl: attach when there's an agent, a fresh session when not.
 func TestResumeFallsBackToAFreshSession(t *testing.T) {
-	s, h, root, reg := withSessions(t)
-	s.Agents = func(string) (string, bool) { return "", false }
+	_, h, root, reg := withSessions(t)
 
-	code, got := post(t, h, "/api/session/new", map[string]any{"kind": "resume", "cwd": root})
+	code, got := post(t, h, "/api/p/proj/session/new", map[string]any{"kind": "resume", "cwd": root})
 	if code != 200 {
 		t.Fatalf("resume = %d %v", code, got)
 	}
@@ -148,9 +160,9 @@ func TestResumeFallsBackToAFreshSession(t *testing.T) {
 
 func TestResumeAttachesToTheAgentThatIsThere(t *testing.T) {
 	s, h, root, _ := withSessions(t)
-	s.Agents = func(string) (string, bool) { return "abc123de", true }
+	agentIn(t, s, "abc123de", root)
 
-	code, got := post(t, h, "/api/session/new", map[string]any{"kind": "resume", "cwd": root})
+	code, got := post(t, h, "/api/p/proj/session/new", map[string]any{"kind": "resume", "cwd": root})
 	if code != 200 {
 		t.Fatalf("resume = %d %v", code, got)
 	}
@@ -159,7 +171,7 @@ func TestResumeAttachesToTheAgentThatIsThere(t *testing.T) {
 	}
 
 	// Twice must land on the session that exists, not start a second attach.
-	_, again := post(t, h, "/api/session/new", map[string]any{"kind": "resume", "cwd": root})
+	_, again := post(t, h, "/api/p/proj/session/new", map[string]any{"kind": "resume", "cwd": root})
 	if again["id"] != got["id"] {
 		t.Errorf("second resume started another session: %v then %v", got["id"], again["id"])
 	}
@@ -168,7 +180,7 @@ func TestResumeAttachesToTheAgentThatIsThere(t *testing.T) {
 func TestAttachRejectsABadAgentID(t *testing.T) {
 	_, h, root, _ := withSessions(t)
 	for _, id := range []string{"", "no", "../../etc/passwd", "abc; rm -rf /"} {
-		code, got := post(t, h, "/api/session/new",
+		code, got := post(t, h, "/api/p/proj/session/new",
 			map[string]any{"kind": "attach", "cwd": root, "agent": id})
 		if code == 200 {
 			t.Errorf("agent id %q was accepted: %v", id, got)
@@ -180,7 +192,7 @@ func TestAttachRejectsABadAgentID(t *testing.T) {
 // any page you had open could connect to localhost and get a shell.
 func TestSocketRefusesAForeignOrigin(t *testing.T) {
 	_, h, root, _ := withSessions(t)
-	_, got := post(t, h, "/api/session/new", map[string]any{"kind": "shell", "cwd": root})
+	_, got := post(t, h, "/api/p/proj/session/new", map[string]any{"kind": "shell", "cwd": root})
 	id := got["id"].(string)
 
 	req := httptest.NewRequest("GET", "/api/session/socket/"+id, nil)
@@ -206,9 +218,11 @@ func TestSocketUnknownSession(t *testing.T) {
 // --no-terminal must remove the routes, not answer "disabled": an absent capability
 // shouldn't look like a broken one.
 func TestNoTerminalHasNoSessionRoutes(t *testing.T) {
-	r := testrepo.New(t, "proj")
-	cfg, _ := config.Load(r.Root)
-	s := &Server{Cfg: cfg, Builder: &work.Builder{Cfg: cfg, Agents: &agents.Reader{}, Terminal: false}}
+	set, err := project.New([]string{testrepo.New(t, "proj").Root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Projects: set, Terminal: false}
 	h := s.Handler()
 
 	// /api/* that doesn't exist is a 404, and the work view says terminals are off.
@@ -219,16 +233,16 @@ func TestNoTerminalHasNoSessionRoutes(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/work", nil))
-	var view work.View
+	var view work.Overview
 	_ = json.Unmarshal(rec.Body.Bytes(), &view)
 	if view.Terminal {
-		t.Error("the work view should report terminals off")
+		t.Error("the overview should report terminals off")
 	}
 }
 
 func TestSessionMethodGuards(t *testing.T) {
 	_, h, _, _ := withSessions(t)
-	for _, path := range []string{"/api/session/new", "/api/session/kill"} {
+	for _, path := range []string{"/api/p/proj/session/new", "/api/session/kill"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if rec.Code != http.StatusMethodNotAllowed {
