@@ -383,3 +383,66 @@ func TestNudgeAfterExit(t *testing.T) {
 	}
 	s.Nudge() // must be a no-op
 }
+
+// A full-screen program's buffer is a reel of frames drawn for one width. Replaying it
+// into a narrower terminal laid every frame over the others at the wrong offsets, and
+// the pane came back unreadable — two renderings of the same text interleaved.
+func TestAltScreenIsNotReplayedAtAnotherWidth(t *testing.T) {
+	r := NewRegistry()
+	defer r.Shutdown()
+
+	s, err := r.Start(Spec{Kind: KindShell, CWD: t.TempDir(), Cols: 120, Rows: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Attach(120, 40)
+	_ = s.Write([]byte("printf '\\033[?1049h\\033[?1000h\\033[?1006h'; echo FRAME''-CONTENT\n"))
+	collect(v.Out, 5*time.Second, "FRAME-CONTENT")
+	v.Detach()
+
+	// Even at the same width: the reel spans every width the session has ever had, and
+	// the frames from before a resize are as wrong as any others.
+	same, replay := s.Attach(120, 40)
+	if strings.Contains(string(replay), "FRAME-CONTENT") {
+		t.Errorf("a full-screen program's frames are never replayed:\n%q", replay)
+	}
+	same.Detach()
+
+	narrow, replay := s.Attach(70, 40)
+	defer narrow.Detach()
+	got := string(replay)
+	if strings.Contains(got, "FRAME-CONTENT") {
+		t.Errorf("frames drawn for another width must not be painted in:\n%q", got)
+	}
+	if !strings.Contains(got, "\x1b[2J") {
+		t.Errorf("the viewer needs a clear screen to repaint into:\n%q", got)
+	}
+	for _, mode := range []string{"?1049h", "?1000h", "?1006h"} {
+		if !strings.Contains(got, mode) {
+			// Without these the new viewer disagrees with the program about what kind
+			// of terminal it is: the mouse goes dead and the alternate screen isn't up.
+			t.Errorf("attach must restore %s:\n%q", mode, got)
+		}
+	}
+}
+
+// A shell has real scrollback, and a narrower window is no reason to throw it away.
+func TestPlainSessionStillReplaysAtAnyWidth(t *testing.T) {
+	r := NewRegistry()
+	defer r.Shutdown()
+
+	s, err := r.Start(Spec{Kind: KindShell, CWD: t.TempDir(), Cols: 120, Rows: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Attach(120, 40)
+	_ = s.Write([]byte("echo SCROLLBACK''-KEPT\n"))
+	collect(v.Out, 5*time.Second, "SCROLLBACK-KEPT")
+	v.Detach()
+
+	narrow, replay := s.Attach(70, 40)
+	defer narrow.Detach()
+	if !strings.Contains(string(replay), "SCROLLBACK-KEPT") {
+		t.Errorf("a shell's scrollback survives a resize:\n%q", replay)
+	}
+}
