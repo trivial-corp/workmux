@@ -1,0 +1,31 @@
+# Your app, one stack per piece of work, one port each.
+#
+#   PORT=8081 docker compose -p myapp1 up -d     → http://localhost:8081
+#   PORT=8082 docker compose -p myapp2 up -d     → http://localhost:8082
+#
+# The port is the only thing that differs between slots, and it comes in from the
+# environment — so this one file serves every slot with nothing to edit per worktree.
+services:
+  web:
+    image: nginx:alpine
+    # The default matters: a bare `docker compose up`, without workmux and without
+    # PORT set, should still work rather than failing on an empty value.
+    ports:
+      - "${PORT:-8080}:80"
+    depends_on: [db]
+
+  # Not published at all: reachable by the app as "db" and by nothing else. It needs
+  # no port of its own, which is the general rule — only publish what you open in a
+  # browser, and two stacks can't collide over what they don't publish.
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: local
+      POSTGRES_DB: app
+    volumes:
+      # No slot in the name: compose prefixes volumes with the project name, so
+      # -p myapp1 and -p myapp2 get separate databases for free.
+      - db:/var/lib/postgresql/data
+
+volumes:
+  db:

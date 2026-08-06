@@ -2335,7 +2335,7 @@ function stackSetup(body) {
     stack: {
       compose: "docker-compose.yml",
       slots: (curProject().name || "app") + "{n}",
-      url: "http://{slot}.localhost",
+      url: "http://localhost:808{n}",
     },
   }, null, 2);
   body.append(snip);
@@ -2343,8 +2343,11 @@ function stackSetup(body) {
     el("p", null, "slots is the naming pattern for each worktree's compose project, where " +
                   "{n} is the slot number. url is where that slot answers — leave it out " +
                   "and workmux won't offer an Open button rather than offering a broken one."),
-    el("p", null, "examples/localhost-routing in the workmux repo is a working two-slot " +
-                  "setup behind a proxy, if you want names rather than ports.")));
+    el("p", null, "One port per slot is the simplest thing that works, and {n} is what " +
+                  "makes it fit in one line. For an app with several services, give each " +
+                  "slot a hostname instead: \"http://{slot}.localhost\", behind a proxy."),
+    el("p", null, "examples/port-per-slot and examples/localhost-routing in the workmux " +
+                  "repo are complete, runnable versions of both.")));
 }
 
 // The chords, on request rather than dumped into an empty pane.

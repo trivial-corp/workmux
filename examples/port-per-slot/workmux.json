@@ -1,0 +1,14 @@
+{
+  "name": "myapp",
+  "stack": {
+    "compose": "compose.yaml",
+    "slots": "myapp{n}",
+    "url": "http://localhost:808{n}",
+    "commands": {
+      "up": "PORT=808{n} docker compose -p {slot} -f {compose} up -d --build",
+      "restart": "PORT=808{n} docker compose -p {slot} -f {compose} restart",
+      "stop": "PORT=808{n} docker compose -p {slot} -f {compose} down --remove-orphans",
+      "logs": "PORT=808{n} docker compose -p {slot} -f {compose} logs -f --tail 200 --no-color"
+    }
+  }
+}

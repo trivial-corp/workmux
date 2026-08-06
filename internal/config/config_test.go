@@ -329,3 +329,53 @@ func TestExpandHome(t *testing.T) {
 		}
 	}
 }
+
+// A project with no reverse proxy gives each slot a port, which means the slot
+// number has to be reachable from both the URL and the commands. Without it the
+// simplest possible stack setup can't say where it is.
+func TestSlotNumberSubstitution(t *testing.T) {
+	c := load(t, write(t, "myapp", map[string]string{
+		"compose.yaml": "services: {}\n",
+		"workmux.json": `{
+			"stack": {
+				"slots": "myapp{n}",
+				"url": "http://localhost:808{n}",
+				"commands": {"up": "PORT=808{n} docker compose -p {slot} up -d"}
+			}
+		}`,
+	}))
+	if got := c.SlotNumber("myapp3"); got != "3" {
+		t.Errorf("SlotNumber(myapp3) = %q, want 3", got)
+	}
+	if got := c.StackURL("myapp3"); got != "http://localhost:8083" {
+		t.Errorf("url = %q", got)
+	}
+	if got := c.StackCmd("up", "myapp3", "", ""); got != "PORT=8083 docker compose -p myapp3 up -d" {
+		t.Errorf("up = %q", got)
+	}
+	// The bare project name is a slot too — `docker compose up` with no -p makes one
+	// — but it has no number, so a URL that needs one can't be built. No button
+	// beats a link to the wrong port.
+	if got := c.SlotNumber("myapp"); got != "" {
+		t.Errorf("SlotNumber(myapp) = %q, want empty", got)
+	}
+	if got := c.StackURL("myapp"); got != "" {
+		t.Errorf("url for an unnumbered slot = %q, want empty", got)
+	}
+}
+
+// {n} must not break the hostname style, which doesn't use it.
+func TestSlotURLWithoutN(t *testing.T) {
+	c := load(t, write(t, "myapp", map[string]string{
+		"compose.yaml": "services: {}\n",
+		"workmux.json": `{"stack": {"slots": "myapp{n}", "url": "http://{slot}.localhost"}}`,
+	}))
+	for slot, want := range map[string]string{
+		"myapp2": "http://myapp2.localhost",
+		"myapp":  "http://myapp.localhost", // unnumbered, and the url doesn't care
+	} {
+		if got := c.StackURL(slot); got != want {
+			t.Errorf("StackURL(%q) = %q, want %q", slot, got, want)
+		}
+	}
+}

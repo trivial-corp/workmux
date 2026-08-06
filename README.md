@@ -253,6 +253,94 @@ workmux init --force      # replace an existing workmux.json
 Piped, scripted or run by an agent it asks nothing and takes the defaults, so it's
 safe in automation. Agents have their own instructions in [AGENTS.md](AGENTS.md).
 
+## Stacks — an app per piece of work
+
+Most changes need nothing running. Some can't be judged without the app up, and
+that's where a worktree per change stops being enough: two branches both want port
+3000, both want the database, and you end up back to one thing at a time.
+
+A **stack** is one running copy of your app, attached to one piece of work. Each gets
+its own **slot** — `myapp1`, `myapp2` — and that slot name is the docker compose
+project name, which is what separates them: containers, networks and volumes are all
+scoped to a compose project, so two slots can't see each other's anything.
+
+The one resource compose can't scope for you is a published port. So there are two
+ways to do this, and the choice is the whole design:
+
+| | |
+| --- | --- |
+| **[A port per slot](examples/port-per-slot)** | `localhost:8081`, `localhost:8082`. Nothing to install. Start here. |
+| **[A hostname per slot](examples/localhost-routing)** | `myapp1.localhost`, `api.myapp1.localhost`. Needs a reverse proxy, once. Worth it when the app has several services, or when a cookie domain or an OAuth callback cares about the host. |
+
+Both examples are complete and runnable — a compose file, a `workmux.json`, and a
+README explaining every line.
+
+### The smallest version
+
+With a compose file in the repo, workmux already found it. All you're adding is
+where a slot answers, because it can't know that and won't guess:
+
+```jsonc
+{
+  "stack": {
+    "url": "http://localhost:808{n}"
+  }
+}
+```
+
+`{n}` is the slot number. Then teach the app to take its port from the environment —
+`ports: ["${PORT:-8080}:80"]` — and pass it in:
+
+```jsonc
+{
+  "stack": {
+    "url": "http://localhost:808{n}",
+    "commands": {
+      "up": "PORT=808{n} docker compose -p {slot} -f {compose} up -d --build"
+    }
+  }
+}
+```
+
+Unspecified commands keep their defaults, so overriding `up` alone is fine.
+
+### What you get
+
+Per piece of work: **▶ start app**, then **↗ open**, **Logs**, **↻ restart** and
+**■ stop**. The Stacks panel adds the part you can't see from a list of buttons —
+what's running across every slot, what each is costing in CPU and memory, and what
+share of the machine that is, because six idle stacks is a laptop that has stopped
+being pleasant to use.
+
+Starting a stack is never automatic. New work makes a worktree and starts an agent
+and **starts no containers**, because most changes don't need them and a minute of
+waiting is what stops people branching at all. You attach a stack later, if the
+change turns out to earn one.
+
+### Substitutions
+
+Available in `url` and in every command:
+
+| | |
+| --- | --- |
+| `{slot}` | the slot name — `myapp2` |
+| `{n}` | the slot number — `2`. A URL that needs one gets no Open button for an unnumbered slot, rather than a wrong link |
+| `{compose}` | the compose file |
+| `{profiles}` | `stack.profiles`, or `$COMPOSE_PROFILES` |
+| `{path}` | the worktree the action was fired from |
+| `{base}` | the base branch |
+
+Commands run through a login shell from the worktree, with `STACK` and
+`COMPOSE_PROFILES` in the environment — so a project with its own script
+(per-slot databases, migrations, a proxy to attach) points the four commands at it
+and keeps everything it already has.
+
+### When there is no stack
+
+`"stack": null`, or simply no compose file. You get worktrees, agents, sessions and
+diffs, and no app controls anywhere — not greyed out, not answering "not
+configured". An absent capability shouldn't look like a broken one.
+
 ## Configuration
 
 None required. Drop a `workmux.json` at the repo root when a default is wrong:
@@ -274,7 +362,8 @@ None required. Drop a `workmux.json` at the repo root when a default is wrong:
   "stack": {                              // omit to detect; null for "no app"
     "compose": "compose.yaml",            // default: the compose file it finds
     "slots": "myapp{n}",                  // default: "{name}{n}" — one per work
-    "url": "http://{slot}.localhost",     // default: none, so no Open button
+    "url": "http://{slot}.localhost",     // default: none, so no Open button.
+                                          // {n} is the slot number: localhost:808{n}
     "profiles": "app,tools",              // default: $COMPOSE_PROFILES
     "commands": {                         // default: plain `docker compose`
       "up": "docker compose -p {slot} -f {compose} up -d --build",
@@ -294,9 +383,10 @@ that fails:
 | `agent.mcp` | no MCP panel |
 | `"agent": null` | no agents anywhere; worktrees and shells |
 
-`{slot}`, `{compose}`, `{profiles}`, `{path}` and `{base}` are substituted into
-stack commands, so a project with its own wrapper script (per-slot databases, a
-reverse proxy to attach) keeps using it.
+`{slot}`, `{n}`, `{compose}`, `{profiles}`, `{path}` and `{base}` are substituted
+into `url` and into stack commands, so a project with its own wrapper script
+(per-slot databases, a reverse proxy to attach) keeps using it. See
+[Stacks](#stacks--an-app-per-piece-of-work) for what to put there.
 
 ## Options
 

@@ -89,6 +89,7 @@ type Config struct {
 	Stack     *Stack    `json:"stack"`
 
 	slotRe *regexp.Regexp
+	numRe  *regexp.Regexp
 }
 
 // raw mirrors the file. Stack and Agent are held as RawMessage so that "absent"
@@ -150,6 +151,11 @@ func Load(root string) (*Config, error) {
 	// not start claiming a project called "trip".
 	numbered := strings.Replace(regexp.QuoteMeta(pat), `\{n\}`, "[0-9]+", 1)
 	c.slotRe = regexp.MustCompile("^(?:" + numbered + "|" + regexp.QuoteMeta(c.Name) + ")$")
+	// The same pattern with the number captured, so a slot can be read back into the
+	// number it was built from. That is what lets a project without a reverse proxy
+	// say where its slots are: one port each, derived from {n}.
+	c.numRe = regexp.MustCompile("^" +
+		strings.Replace(regexp.QuoteMeta(pat), `\{n\}`, "([0-9]+)", 1) + "$")
 	return c, nil
 }
 
@@ -270,13 +276,34 @@ func (c *Config) SlotName(n int) string {
 // projects on the same machine aren't mistaken for this repo's work.
 func (c *Config) IsSlot(s string) bool { return c.slotRe.MatchString(s) }
 
+// SlotNumber reads the number back out of a slot name — myapp2 is 2 — or "" when
+// the name isn't numbered at all, which is the case for the bare project name that
+// `docker compose up` creates without -p.
+func (c *Config) SlotNumber(slot string) string {
+	if c.numRe == nil {
+		return ""
+	}
+	if m := c.numRe.FindStringSubmatch(slot); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // StackURL is where a slot is reachable, or "" when the project didn't say
 // (in which case there is no Open button rather than a broken one).
+//
+// {n} is the slot number, for the projects that give each slot a port instead of a
+// hostname. When the slot has no number — the bare project name — a URL that wants
+// one can't be built, and no button beats a wrong link.
 func (c *Config) StackURL(slot string) string {
 	if c.Stack == nil {
 		return ""
 	}
-	return strings.ReplaceAll(c.Stack.URL, "{slot}", slot)
+	n := c.SlotNumber(slot)
+	if n == "" && strings.Contains(c.Stack.URL, "{n}") {
+		return ""
+	}
+	return strings.NewReplacer("{slot}", slot, "{n}", n).Replace(c.Stack.URL)
 }
 
 // Profiles is the compose profile list, empty when there's no stack.
@@ -299,6 +326,7 @@ func (c *Config) StackCmd(action, slot, path, base string) string {
 	}
 	r := strings.NewReplacer(
 		"{slot}", slot,
+		"{n}", c.SlotNumber(slot),
 		"{path}", path,
 		"{base}", base,
 		"{compose}", c.Stack.Compose,
