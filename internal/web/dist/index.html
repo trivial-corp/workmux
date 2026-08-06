@@ -1885,7 +1885,11 @@ function projectMenu(anchor) {
 // Adding one from the page is the same call `workmux` makes from another checkout,
 // so there is one way a project arrives and not two.
 async function addProject() {
-  const dir = prompt("Path to a git repository:", "");
+  // Prefilled with where the repositories you already serve live, because an empty
+  // box asks you to type an absolute path from memory. ~ works too — the server
+  // expands it, since nothing has run a shell over what you type here.
+  const near = (projects()[0] || {}).root || "";
+  const dir = prompt("Path to a git repository:", near.replace(/\/[^/]*$/, "/"));
   if (!dir) return;
   let r;
   try {

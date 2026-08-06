@@ -2,8 +2,10 @@ package web
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 
+	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
 )
 
@@ -60,7 +62,10 @@ func (s *Server) addProject(w http.ResponseWriter, root string) {
 	// Resolved here, the same way the command line resolves it, so the same repo
 	// reached by two different paths is one project and not two. Symlinks first
 	// because git prints resolved paths and worktree ownership compares them.
-	abs, err := filepath.Abs(root)
+	//
+	// ~ first of all: this path came from a text field, and nothing has run a shell
+	// over it. Without this it resolved against the server's own directory.
+	abs, err := filepath.Abs(config.ExpandHome(root))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -70,9 +75,15 @@ func (s *Server) addProject(w http.ResponseWriter, root string) {
 	}
 	abs = gitx.PrimaryRoot(abs)
 	if !gitx.IsRepo(abs) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": abs + " is not a git repository",
-		})
+		// "not a git repository" is the wrong answer when the path isn't there at
+		// all, and a typo in a hand-typed path is the likelier of the two.
+		why := " is not a git repository"
+		if st, err := os.Stat(abs); err != nil {
+			why = " doesn't exist"
+		} else if !st.IsDir() {
+			why = " is not a directory"
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": abs + why})
 		return
 	}
 	known := s.Projects.Len()

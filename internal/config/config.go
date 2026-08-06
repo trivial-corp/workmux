@@ -329,13 +329,26 @@ func (c *Config) JobsDir() string {
 	if c.Agent.Jobs == "" {
 		return ""
 	}
-	p := c.Agent.Jobs
-	if strings.HasPrefix(p, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, strings.TrimPrefix(p[1:], string(filepath.Separator)))
-		}
+	return ExpandHome(c.Agent.Jobs)
+}
+
+// ExpandHome turns a leading ~ into the home directory.
+//
+// A shell does this before workmux ever sees a path, which is exactly why it has to
+// be done here too: the paths that *don't* come from a shell — a config file, a text
+// field in the browser, a request from a phone — look identical and are not
+// expanded by anything. Typing ~/code/thing into the "add a repository" box
+// resolved it against the server's working directory and reported that
+// /wherever/workmux/was/~/code/thing is not a git repository.
+func ExpandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~"+string(filepath.Separator)) {
+		return p // ~otheruser is not ours to guess at
 	}
-	return p
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, strings.TrimPrefix(p[1:], string(filepath.Separator)))
 }
 
 // shellQuote wraps a value for a POSIX shell. Prompts are arbitrary user text

@@ -305,3 +305,27 @@ func TestSlotsDropATrailingNumberFromTheName(t *testing.T) {
 		t.Errorf("slot = %q", got)
 	}
 }
+
+// A path that never passed through a shell still has to work: config files, the
+// browser's "add a repository" box, a request from a phone. Typing ~/code/thing
+// there resolved it against the server's own working directory.
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	for in, want := range map[string]string{
+		"~":              home,
+		"~/":             home,
+		"~/code/thing":   filepath.Join(home, "code/thing"),
+		"/abs/path":      "/abs/path",
+		"relative/path":  "relative/path",
+		"":               "",
+		"~otheruser/x":   "~otheruser/x", // not ours to guess at
+		"a/~/not-a-home": "a/~/not-a-home",
+	} {
+		if got := ExpandHome(in); got != want {
+			t.Errorf("ExpandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

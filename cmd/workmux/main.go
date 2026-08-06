@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/trivial-corp/workmux/internal/bg"
+	"github.com/trivial-corp/workmux/internal/config"
 	"github.com/trivial-corp/workmux/internal/gitx"
 	"github.com/trivial-corp/workmux/internal/initcmd"
 	"github.com/trivial-corp/workmux/internal/instance"
@@ -339,7 +340,7 @@ func resolveRoots(given []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range given {
-		root, err := filepath.Abs(r)
+		root, err := filepath.Abs(config.ExpandHome(r))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "workmux: %v\n", err)
 			os.Exit(1)
