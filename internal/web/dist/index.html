@@ -197,6 +197,25 @@ main[data-surface="changes"] .pane { display:none; }
 .diff .l.del { background:#261013; color:#fcaaaa; }
 .diff .l.hunk { background:#131a2b; color:#93b4ff; }
 .diff .l.meta { color:var(--t3); }
+/* One block per file. The name stays put while you scroll that file's hunks, and
+   stops being true the moment the next file's name reaches the top. */
+.diff .dtotal { display:flex; gap:10px; padding:9px 10px 8px; font-family:var(--mono);
+                font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--t3); }
+.diff .dtotal .plus, .diff .dtotal .minus { letter-spacing:0; text-transform:none; font-size:11px; }
+.diff .dfile, .diff .dmsg { border-bottom:1px solid var(--line-soft); }
+.diff .dhead { position:sticky; top:0; z-index:1; display:flex; gap:10px; align-items:baseline;
+               padding:8px 10px; background:var(--elev);
+               border-bottom:1px solid var(--line-soft); cursor:pointer;
+               font-family:var(--mono); font-size:11px; color:var(--t2); list-style:none; }
+.diff .dhead::-webkit-details-marker { display:none; }
+.diff .dhead::before { content:"▾"; color:var(--t3); font-size:9px; flex:0 0 auto; }
+.diff .dfile:not([open]) .dhead::before, .diff .dmsg:not([open]) .dhead::before { content:"▸"; }
+.diff .dhead:hover { color:var(--t1); }
+.diff .dhead .n { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+                  white-space:nowrap; direction:rtl; text-align:left; }
+.diff .dhead .plus { color:#7ee2a8; flex:0 0 auto; }
+.diff .dhead .minus { color:#f79a9a; flex:0 0 auto; }
+.diff .dhead .bin { color:var(--t3); flex:0 0 auto; }
 
 /* ── sheets ──────────────────────────────────────────────────────────────── */
 .scrim { position:fixed; inset:0; background:#000c; display:none; z-index:9; }
@@ -1404,8 +1423,49 @@ async function showCommitDiff(c) {
   paintDiff(c.sha + "  " + c.msg, d.diff, d.error);
 }
 
+// A commit is many files, and git prints them end to end with nothing between them but
+// a line starting "diff --git". Read as one scroll that's unreadable, so the diff is cut
+// back into the files it was made of. The parsing is here rather than in a library
+// because splitting on that line is the whole job: what a diff renderer would add is a
+// second visual language to keep in sync with this one.
+const FILE_HEAD = /^(diff --git |\+\+\+ |--- |index |new file|deleted file|similarity |rename |old mode|new mode|Binary files )/;
+
+function splitDiff(diff) {
+  const files = [];
+  const preamble = [];
+  let f = null;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      f = { path: (line.match(/ b\/(.*)$/) || [, line.slice(11)])[1], lines: [], add: 0, del: 0, bin: false };
+      files.push(f);
+      continue;
+    }
+    if (!f) { preamble.push(line); continue; }
+    // The +++ line is the authoritative name: a rename says one thing in the header and
+    // another here, and here is where it ends up.
+    if (line.startsWith("+++ b/")) { f.path = line.slice(6); continue; }
+    if (line.startsWith("Binary files")) f.bin = true;
+    if (FILE_HEAD.test(line) && !line.startsWith("--- ")) continue;
+    if (line.startsWith("--- ")) continue;
+    if (line.startsWith("+") && !line.startsWith("+++")) f.add++;
+    else if (line.startsWith("-") && !line.startsWith("---")) f.del++;
+    f.lines.push(line);
+  }
+  while (preamble.length && !preamble[preamble.length - 1].trim()) preamble.pop();
+  return { preamble, files };
+}
+
+function diffLine(line) {
+  let cls = "l";
+  if (line.startsWith("@@")) cls += " hunk";
+  else if (line.startsWith("+")) cls += " add";
+  else if (line.startsWith("-")) cls += " del";
+  else if (line.startsWith("\\")) cls += " meta";
+  return el("div", cls, line || " ");
+}
+
 // A diff is rendered line by line rather than as one blob so additions and
-// deletions can be coloured, and so the header can stay put while you scroll.
+// deletions can be coloured, and so each file's name stays put while you scroll it.
 function paintDiff(title, diff, error) {
   const bar = $("chbar"), body = $("chbody");
   bar.textContent = ""; body.textContent = "";
@@ -1421,13 +1481,49 @@ function paintDiff(title, diff, error) {
     box.append(el("div", "hollow", el("p", null, "No changes in this file.")));
     body.append(box); return;
   }
-  for (const line of diff.split("\n")) {
-    let cls = "l";
-    if (line.startsWith("@@")) cls += " hunk";
-    else if (/^(\+\+\+|---|diff |index |new file|deleted file|similarity )/.test(line)) cls += " meta";
-    else if (line.startsWith("+")) cls += " add";
-    else if (line.startsWith("-")) cls += " del";
-    box.append(el("div", cls, line || " "));
+  const { preamble, files } = splitDiff(diff);
+  // A commit message can run longer than a screen, and it was pushing every file below
+  // the fold — the opposite of what splitting them up was for. So it folds.
+  if (preamble.length) {
+    const msg = el("details", "dmsg");
+    msg.open = preamble.length <= 10;
+    const head = el("summary", "dhead");
+    head.append(el("span", "n", "message"));
+    head.append(el("span", "bin", preamble.length + " lines"));
+    msg.append(head);
+    const lines = el("div", "dlines");
+    for (const line of preamble) lines.append(el("div", "l meta", line || " "));
+    msg.append(lines);
+    box.append(msg);
+  }
+  if (!files.length) for (const line of diff.split("\n")) box.append(diffLine(line));
+
+  if (files.length) {
+    const tot = el("div", "dtotal");
+    const add = files.reduce((n, f) => n + f.add, 0), del = files.reduce((n, f) => n + f.del, 0);
+    tot.append(el("span", "n", files.length + (files.length === 1 ? " file" : " files")));
+    if (add) tot.append(el("span", "plus", "+" + add));
+    if (del) tot.append(el("span", "minus", "−" + del));
+    box.append(tot);
+  }
+
+  // Small enough to read in one go: leave it open. A twelve-file commit opens as a list
+  // of what it touched, which is the thing you actually wanted to know first.
+  const total = files.reduce((n, f) => n + f.lines.length, 0);
+  const openAll = files.length === 1 || total <= 400;
+  for (const f of files) {
+    const sec = el("details", "dfile");
+    sec.open = openAll;
+    const head = el("summary", "dhead");
+    head.append(el("span", "n", f.path));
+    if (f.bin) head.append(el("span", "bin", "binary"));
+    if (f.add) head.append(el("span", "plus", "+" + f.add));
+    if (f.del) head.append(el("span", "minus", "−" + f.del));
+    sec.append(head);
+    const lines = el("div", "dlines");
+    for (const line of f.lines) lines.append(diffLine(line));
+    sec.append(lines);
+    box.append(sec);
   }
   body.append(box);
 }
