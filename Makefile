@@ -28,8 +28,12 @@ lint:
 #   make dev ROOT=~/code/my-drupal-site
 # The frontend is served from internal/web/dist, so editing it is a refresh, and
 # every git/docker/agent subprocess is logged with its duration and exit code.
+#
+# 4316, not the default 4315: the workmux you actually use is probably on that one,
+# and a dev build has no business sharing a port — or a page — with it. --dev never
+# joins a running server and never becomes one others join, so the two coexist.
 ROOT ?= .
-PORT ?= 4315
+PORT ?= 4316
 dev:
 	go run ./cmd/workmux --root $(ROOT) --port $(PORT) --dev
 
