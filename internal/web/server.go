@@ -268,8 +268,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// "server" is an identity check, not decoration: a second workmux probes this
 	// port to decide whether to hand its repository over, and something else
 	// answering 200 must not be mistaken for one.
+	// "dev" so a later invocation refused for a busy port can say what has it: a
+	// dev build is almost always your own `make dev` from another terminal.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "server": "workmux", "projects": s.projectIDs(), "names": names,
+		"ok": true, "server": "workmux", "dev": s.DevDir != "",
+		"projects": s.projectIDs(), "names": names,
 	})
 }
 

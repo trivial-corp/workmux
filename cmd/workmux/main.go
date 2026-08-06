@@ -123,13 +123,21 @@ func main() {
 			return
 		}
 	}
-	if own != "" && instance.Running(boundAt(opts)) {
-		// It would fail on bind a moment from now with "address already in use",
-		// which doesn't mention the thing that's actually in the way.
-		fmt.Fprintf(os.Stderr, "workmux: a workmux is already running at %s, and %s "+
-			"needs a server of its own.\nGive this one another port: --port %d\n",
-			boundAt(opts), own, opts.port+1)
-		os.Exit(1)
+	if own != "" {
+		if h, busy := instance.Probe(boundAt(opts)); busy {
+			// It would fail on bind a moment from now with "address already in use",
+			// which names the port and not the thing holding it. Say what that is:
+			// it is nearly always one of your own, and a dev build almost always an
+			// earlier `make dev` in a terminal you've lost track of.
+			fmt.Fprintf(os.Stderr, "workmux: %s is already running at %s, and %s needs "+
+				"a server of its own.\n", h.Describe(), boundAt(opts), own)
+			if h.Dev {
+				fmt.Fprintf(os.Stderr, "That's an earlier --dev run, still up. Open it, "+
+					"or stop it and start this one.\n")
+			}
+			fmt.Fprintf(os.Stderr, "Another port: --port %d\n", opts.port+1)
+			os.Exit(1)
+		}
 	}
 
 	projects, err := project.New(roots)

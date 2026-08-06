@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -88,35 +89,60 @@ func Load() (Info, bool) {
 	return info, true
 }
 
-// health is what /api/health answers.
-type health struct {
+// Health is what a running workmux says about itself.
+//
+// More than liveness, because the interesting question when a port is taken is
+// *which* workmux has it. Nearly always it's one of your own, and being told
+// "a dev build, serving homelab" is the difference between recognising it and
+// going looking for it.
+type Health struct {
 	OK       bool     `json:"ok"`
 	Server   string   `json:"server"`
+	Dev      bool     `json:"dev"`
 	Projects []string `json:"projects"`
+	Names    []string `json:"names"`
+}
+
+// Describe is this server in a phrase, for an error message about a busy port.
+func (h Health) Describe() string {
+	what := "a workmux"
+	if h.Dev {
+		what = "a --dev workmux"
+	}
+	if len(h.Names) > 0 {
+		return what + " serving " + strings.Join(h.Names, ", ")
+	}
+	return what
 }
 
 // client keeps the timeouts short. Everything here happens between a person
 // pressing enter and the banner appearing, and a stale note must not cost seconds.
 var client = &http.Client{Timeout: 2 * time.Second}
 
-// Running reports whether a workmux is answering at this URL.
+// Probe asks what is answering at this URL, and whether it is a workmux at all.
 //
 // The identity check matters: port 4315 might be anything, and handing a repository
 // to something that merely returns 200 is how you get a very confusing bug.
-func Running(url string) bool {
+func Probe(url string) (Health, bool) {
 	res, err := client.Get(url + "/api/health")
 	if err != nil {
-		return false
+		return Health{}, false
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return false
+		return Health{}, false
 	}
-	var h health
+	var h Health
 	if json.NewDecoder(res.Body).Decode(&h) != nil {
-		return false
+		return Health{}, false
 	}
-	return h.OK && h.Server == "workmux"
+	return h, h.OK && h.Server == "workmux"
+}
+
+// Running reports whether a workmux is answering at this URL.
+func Running(url string) bool {
+	_, ok := Probe(url)
+	return ok
 }
 
 // Joined is what a running server says after taking a repository on.
