@@ -159,9 +159,12 @@ main[data-surface="changes"] .pane { display:none; }
                    white-space:nowrap; vertical-align:bottom; }
 /* inline-block, or the width is ignored: the tab is not a flex container, and an inline
    <i> with a width is a dot nobody can see. */
-.seg button .dot.wants { display:inline-block; width:6px; height:6px; margin-right:2px;
-                         background:var(--wants); vertical-align:middle; }
-.seg button .dot.other { opacity:.65; }
+.seg button .dot.wants { display:inline-block; width:6px; height:6px; margin:0 5px 1px 0;
+                         background:var(--wants); vertical-align:middle; flex:0 0 auto; }
+/* One waiting behind the menu rather than in front of you: same colour, hollow, and it
+   sits after the count instead of being crushed against it. */
+.seg button .dot.other { margin:0 0 1px 7px; background:none;
+                         box-shadow:inset 0 0 0 2px var(--wants); }
 .popover .mrow.wants .mh { color:var(--wants); }
 .chip.app { color:var(--up); }
 .chip.pr { color:var(--t3); }
@@ -902,10 +905,10 @@ function tabs(active) {
   // Another one is waiting on you, and it's behind the caret.
   if (mine.some(s => s !== cur && sessionWaiting(s, w))) sess.append(el("i", "dot wants other"));
   sess.append(el("span", "caret", "▾"));
-  // The label goes there, the caret opens the menu. Making the label do both meant
-  // clicking a tab to get back to your terminal popped a menu you didn't ask for.
-  sess.lastChild.onclick = (e) => { e.stopPropagation(); sessionMenu(sess, w, mine); };
-  sess.onclick = () => setSurface("session");
+  // The whole tab opens the menu, caret or not: a 10px chevron is a small target for the
+  // only way to reach what's behind it. Getting back to the terminal is the first thing
+  // in the menu, so it is still one click away.
+  sess.onclick = () => sessionMenu(sess, w, mine);
   seg.append(sess);
 
   // Shell is one click, because it's the one you want without thinking.
@@ -922,18 +925,8 @@ function tabs(active) {
   const n = CH && CH.for === SEL ? (CH.files || []).length : 0;
   if (n) git.append(el("span", "n", String(n)));
   if (w && w.behind > 0) git.append(el("span", "n", "⇣" + w.behind));
-  const caret = el("span", "caret", "▾");
-  caret.onclick = (e) => { e.stopPropagation(); gitMenu(git, w); };
-  git.append(caret);
-  git.onclick = () => {
-    // Already looking at a diff? The tab is how you get back to the list.
-    if ($("main").dataset.surface === "changes" && (CHFILE || CHREV)) {
-      CHFILE = null; CHREV = null;
-      renderChanges();
-      return;
-    }
-    setSurface("changes");
-  };
+  git.append(el("span", "caret", "▾"));
+  git.onclick = () => gitMenu(git, w);
   seg.append(git);
   return seg;
 }
@@ -951,12 +944,29 @@ function menu(anchor, items) {
   const m = el("div", "popover");
   for (const it of items) {
     if (it.sep) { m.append(el("div", "msep")); continue; }
-    const row = el("button", "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : "") +
-                              (it.wants ? " wants" : ""));
+    // A row that goes somewhere is an anchor, not a button calling window.open. A popup
+    // blocker will drop the second one without a word — which is what "clicking the pull
+    // request does nothing" was — and an anchor is also middle-clickable and copyable.
+    const row = el(it.href ? "a" : "button",
+                   "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : "") +
+                   (it.wants ? " wants" : "") + (it.disabled ? " off" : ""));
+    if (it.href) {
+      row.href = it.href;
+      row.target = "_blank";
+      row.rel = "noopener noreferrer";
+    } else {
+      row.disabled = !!it.disabled;
+    }
     row.append(el("span", "ml", it.label));
     if (it.hint) row.append(el("span", "mh", it.hint));
-    row.disabled = !!it.disabled;
-    row.onclick = () => { closeMenu(); it.go && it.go(); };
+    row.onclick = (e) => {
+      // The menu sits over the terminal. Without this the same click reaches it and
+      // jumps it to the bottom of its buffer, which reads as the window "going down".
+      e.stopPropagation();
+      if (it.disabled) { e.preventDefault(); return; }
+      closeMenu();
+      it.go && it.go();
+    };
     m.append(row);
   }
   document.body.append(m);
@@ -970,6 +980,12 @@ function sessionMenu(anchor, w, mine) {
   if (!w) return;
   const can = caps(w);
   const items = [];
+  if (ACTIVE && $("main").dataset.surface !== "session") {
+    const cur = mine.find(s => s.id === ACTIVE);
+    items.push({ label: "Back to " + (cur ? sessionLabel(cur, w) : "the terminal"),
+                 go: () => setSurface("session") });
+    items.push({ sep: true });
+  }
   for (const s of mine) {
     items.push({
       label: sessionLabel(s, w),
@@ -1007,13 +1023,14 @@ function gitMenu(anchor, w) {
   });
   items.push({ label: "Fetch " + w.base, hint: "check for new commits", go: () => refreshDrift(w) });
   items.push({ sep: true });
+  items.push({ label: "Show the changes", hint: "files and commits", go: () => setSurface("changes") });
+  items.push({ sep: true });
   items.push({ label: "Open a git session", hint: "lazygit", go: () => start("git") });
   const repo = projOf(w).repo_url;
   if ((w.prs || []).length && repo) {
     items.push({ sep: true });
     for (const n of w.prs.slice(0, 4)) {
-      items.push({ label: "Pull request #" + n, hint: "github",
-                   go: () => window.open(repo + "/pull/" + n, "_blank") });
+      items.push({ label: "Pull request #" + n, hint: "github", href: repo + "/pull/" + n });
     }
   }
   menu(anchor, items);
