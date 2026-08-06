@@ -198,7 +198,7 @@ main[data-surface="changes"] .pane { display:none; }
 @media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
 .term { flex:1 1 auto; min-height:0; background:var(--ink); overflow:hidden; position:relative; }
 /* One wrapper per session, created once and kept. A terminal cannot be re-opened by calling
-   open() twice, and clearing the container to re-open it is how a pane came back
+   showPane() twice, and clearing the container to re-open it is how a pane came back
    blank after you switched tabs and returned. */
 .wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; display:none; }
 .wrap.on { display:block; }
@@ -833,7 +833,7 @@ function cmpId(a, b) {
 let AUTO = null;                       // don't try to auto-start the same work twice
 function showWork(mayStart) {
   const s = sessionFor(SEL);
-  if (s) { if (s.id !== ACTIVE) open(s.id); return; }
+  if (s) { if (s.id !== ACTIVE) showPane(s.id); return; }
   ACTIVE = null;
   renderBar();
   const w = selected();
@@ -915,7 +915,7 @@ function tabs(active) {
   const sh = el("button", null, "Shell");
   const openShell = mine.find(s => s.kind === "shell");
   sh.setAttribute("aria-current", (active === "session" && openShell && openShell.id === ACTIVE) ? "true" : "false");
-  sh.onclick = () => openShell ? open(openShell.id) : start("shell");
+  sh.onclick = () => openShell ? showPane(openShell.id) : start("shell");
   seg.append(sh);
 
   // Git *is* the changes surface. They were two controls for one idea: a tab that
@@ -944,9 +944,10 @@ function menu(anchor, items) {
   const m = el("div", "popover");
   for (const it of items) {
     if (it.sep) { m.append(el("div", "msep")); continue; }
-    // A row that goes somewhere is an anchor, not a button calling window.open. A popup
-    // blocker will drop the second one without a word — which is what "clicking the pull
-    // request does nothing" was — and an anchor is also middle-clickable and copyable.
+    // A row that goes somewhere is an anchor, not a button calling window.open: it is
+    // middle-clickable, copyable, and shows where it goes. It was blamed on a popup
+    // blocker at the time; the real reason "clicking the pull request does nothing" was
+    // window.open being shadowed by this page's own open() — see showPane.
     const row = el(it.href ? "a" : "button",
                    "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : "") +
                    (it.wants ? " wants" : "") + (it.disabled ? " off" : ""));
@@ -992,7 +993,7 @@ function sessionMenu(anchor, w, mine) {
       hint: sessionWaiting(s, w) ? "needs you" : (s.id === ACTIVE ? "open" : ""),
       wants: sessionWaiting(s, w),
       on: s.id === ACTIVE,
-      go: () => open(s.id),
+      go: () => showPane(s.id),
     });
   }
   if (mine.length) items.push({ sep: true });
@@ -1184,7 +1185,7 @@ async function start(kind, subject) {
     return;
   }
   await refreshSessions();
-  open(r.id);
+  showPane(r.id);
 }
 
 async function kill(id) {
@@ -1205,10 +1206,16 @@ async function kill(id) {
   await refreshSessions();
 }
 
-// open shows a pane, creating it once. Its element is never destroyed and the
+// showPane shows a pane, creating it once. Its element is never destroyed and the
 // Terminal is never re-opened: both of those leave the renderer attached to
 // a node that is no longer in the document, which is a pane that paints nothing.
-async function open(id) {
+//
+// Not called open(). A top-level `function open` becomes window.open, so every
+// window.open() on this page was calling *this* — a clicked link opened a pane whose
+// id was a URL, which killed the terminal you were reading and connected a socket to
+// /api/session/socket/https://…  The pull request that "did nothing" was the same
+// shadowing, and no popup blocker was ever involved.
+async function showPane(id) {
   ACTIVE = id;
   markSeen(SEL);
   markSession(SEL, id);
