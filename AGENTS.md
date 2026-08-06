@@ -129,6 +129,12 @@ the URL the first one wrote to `$XDG_STATE_HOME/workmux/server.json`, checks a
 workmux is answering there, posts the repository to `/api/projects`, and exits.
 `--standalone` opts out in both directions.
 
+Joining is unconditional. It briefly refused when flags a join can't honour were
+passed (`--dev` above all), and that was wrong twice over: it turned "add this
+repo" into an error about a port, and the flag it was protecting is worth a line
+of output, not a dead end. Those flags now report having had no effect. The only
+thing that fails on a busy port is `--standalone`, which asked for the port.
+
 The set is therefore mutable while the server runs, which is why `project.Set`
 locks and why `List` hands back a copy: a poll must never see it half-changed. A
 project that arrives over HTTP has to come out identical to one that was there at

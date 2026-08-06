@@ -182,11 +182,15 @@ a process nothing has a route to — and it says how many before it does it.
 How the second invocation finds the first: a running server writes its URL to
 `$XDG_STATE_HOME/workmux/server.json` (`~/.local/state/workmux/server.json`), and a
 later one reads it, checks a workmux is actually answering there, and posts to
-`/api/projects`. Pass `--standalone` to skip that and get a server of your own; it also doesn't
-become the one later invocations look for first. `--dev`, `--token` and
-`--no-terminal` imply it, because each describes a server *this* process would be
-and none of them can be honoured by joining one that is already up — a flag that
-quietly does nothing is worse than a flag that refuses.
+`/api/projects`. Joining always wins. Running workmux somewhere adds that repository to whatever is
+up — there is no invocation that would rather fail with a message about a port.
+`--dev`, `--token` and `--no-terminal` describe a server *this* process would have
+been and a join can't honour them, so they're reported as having had no effect
+rather than turning "add this repo" into an error.
+
+Pass `--standalone` for a server of your own; it also doesn't become the one later
+invocations look for. That's the way to run a dev build beside the workmux you
+actually use.
 
 ```
 workmux --standalone --port 4316 --root ~/code/scratch
@@ -392,10 +396,11 @@ per-worktree stacks:
 make dev ROOT=~/code/some-project            # :4316, beside the workmux you actually use
 ```
 
-`--dev` is always its own server: it never joins a running one and never becomes
-the one others join. A dev build serving the workmux you work in would be the same
-mistake twice — its frontend comes off disk and its code is whatever you're
-mid-edit on. It defaults to 4316 for the same reason; `PORT=` moves it.
+It defaults to 4316 so it doesn't land on the 4315 you actually use. Point it at a
+port something is already serving and it joins that server instead — adding the
+repo, and saying that `--dev` had no effect, because the frontend you're editing
+isn't the one being served. `make dev PORT=… STANDALONE=1` is not a thing; add
+`--standalone` yourself if you want a second server on a busy port to be an error.
 
 Against a monorepo with a stack and 40-odd worktrees, that looks like:
 

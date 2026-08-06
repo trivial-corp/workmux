@@ -54,15 +54,13 @@ server — both projects, one page, one port.
       --root DIR     repository to serve. Repeat it, or list directories after
                      the options, to serve several (default: this directory)
       --standalone   start a server of my own instead of joining one that is
-                     already running. It also doesn't become the server later
-                     invocations look for first. Implied by --dev, --token and
-                     --no-terminal, which describe a server this one would be
+                     already running, and don't become the one later invocations
+                     look for. The way to run a second server on purpose
       --no-terminal  dashboard only — don't serve shells
       --open         open a browser once it's listening
       --dev [DIR]    serve the frontend from disk (default internal/web/dist)
                      instead of the copy baked into the binary, and log as if
-                     --verbose. Editing the UI becomes a refresh. Always its own
-                     server: it never joins one, and none join it
+                     --verbose. Editing the UI becomes a refresh
       --verbose      log every request, every subprocess and what it returned
   -h, --help         this
   -V, --version      print the version
@@ -113,31 +111,15 @@ func main() {
 	// one page with everything on it is the whole point, and two servers can't do
 	// that however many tabs you open.
 	//
-	// Unless this invocation asked for a server of its own — see ownServerFlag. That
-	// distinction was missing and `make dev` paid for it: --dev joined the workmux
-	// already running, so it served that binary's embedded frontend and the flag did
-	// nothing at all, silently.
-	own := ownServerFlag(opts)
-	if !opts.standalone && own == "" {
+	// Always — there is no invocation that would rather fail. This briefly refused
+	// when flags like --dev were passed, on the grounds that a join can't honour
+	// them, and that was the wrong trade: it turned "add this repo" into an error
+	// about a port. A flag a join can't honour is worth a line of output, not a
+	// dead end. --standalone is how you ask for a server of your own.
+	if !opts.standalone {
 		if url, ok := runningServer(opts); ok {
-			join(url, roots, opts.open)
+			join(url, roots, opts.open, ignoredByJoining(opts))
 			return
-		}
-	}
-	if own != "" {
-		if h, busy := instance.Probe(boundAt(opts)); busy {
-			// It would fail on bind a moment from now with "address already in use",
-			// which names the port and not the thing holding it. Say what that is:
-			// it is nearly always one of your own, and a dev build almost always an
-			// earlier `make dev` in a terminal you've lost track of.
-			fmt.Fprintf(os.Stderr, "workmux: %s is already running at %s, and %s needs "+
-				"a server of its own.\n", h.Describe(), boundAt(opts), own)
-			if h.Dev {
-				fmt.Fprintf(os.Stderr, "That's an earlier --dev run, still up. Open it, "+
-					"or stop it and start this one.\n")
-			}
-			fmt.Fprintf(os.Stderr, "Another port: --port %d\n", opts.port+1)
-			os.Exit(1)
 		}
 	}
 
@@ -241,7 +223,23 @@ func main() {
 		}()
 	}
 
+	// Take the port before saying anything. It used to print the whole banner —
+	// "Ctrl-C to stop" and all — and then fail to bind, which reads as a server that
+	// started and instantly died.
 	addr := net.JoinHostPort(opts.host, strconv.Itoa(opts.port))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "workmux: can't listen on %s: %v\n", addr, err)
+		if h, ok := instance.Probe(boundAt(opts)); ok {
+			// Reachable here only with --standalone; without it we'd have joined.
+			fmt.Fprintf(os.Stderr, "%s is there — drop --standalone to add these "+
+				"repositories to it instead.\n", h.Describe())
+		} else {
+			fmt.Fprint(os.Stderr, "Something that isn't workmux has that port.\n")
+		}
+		fmt.Fprintf(os.Stderr, "Another port: --port %d\n", opts.port+1)
+		os.Exit(1)
+	}
 	shown := opts.host
 	if opts.host == "0.0.0.0" || opts.host == "::" {
 		shown = "127.0.0.1"
@@ -273,7 +271,7 @@ func main() {
 	for _, p := range projects.List() {
 		fmt.Fprintf(os.Stderr, "  \033[2m%-12s\033[0m %s\n", p.ID, p.Root())
 	}
-	if !opts.standalone && !opts.devSet {
+	if !opts.standalone {
 		fmt.Fprint(os.Stderr, "  \033[2mrun workmux in another repo to add it here\033[0m\n")
 	}
 	fmt.Fprint(os.Stderr, "  Ctrl-C to stop.\n\n")
@@ -319,13 +317,13 @@ func main() {
 	// everything else joins. (It can still be found by a later invocation aiming
 	// at the port it happens to be on — one server per port is the rule, and this
 	// flag is about which one this process becomes, not about hiding.)
-	if !opts.standalone && !opts.devSet {
+	if !opts.standalone {
 		if err := instance.Save(where); err != nil && (opts.verbose || opts.devSet) {
 			log.Printf("could not record this server's address: %v", err)
 		}
 		defer instance.Clear()
 	}
-	if err := srv.Listen(addr); err != nil {
+	if err := srv.Serve(ln); err != nil {
 		instance.Clear()
 		fmt.Fprintf(os.Stderr, "workmux: %v\n", err)
 		os.Exit(1)
@@ -386,32 +384,33 @@ func boundAt(o options) string {
 	return fmt.Sprintf("http://%s:%d", displayHost(o.host), o.port)
 }
 
-// ownServerFlag names the flag that makes this invocation a server rather than a
-// client, or "" when it is free to join one.
+// ignoredByJoining lists the flags that describe a server this process would have
+// been, and that handing a repository to one already running cannot honour: a
+// frontend read off disk, terminals off, a pinned token.
 //
-// Joining is what happens when you didn't ask for a server. These three describe a
-// server this process would *be* — a frontend read off disk, terminals off, a
-// pinned token — and none of them can be honoured by handing a repository to a
-// server that is already up. Silently joining would give you something that looks
-// like it worked and isn't what you asked for.
+// They don't stop the join — the repository still gets added, which is what you
+// asked for — they get said out loud, because a flag that quietly does nothing is
+// how you end up debugging a frontend that was never being served.
 //
 // The environment doesn't count, only the flag: WORKMUX_TERMINAL=0 set once in a
-// shell profile shouldn't quietly turn every invocation into its own server.
-func ownServerFlag(o options) string {
-	switch {
-	case o.devSet:
-		return "--dev"
-	case flagGiven("no-terminal"):
-		return "--no-terminal"
-	case o.tokenSet:
-		return "--token"
+// shell profile shouldn't produce a warning on every invocation.
+func ignoredByJoining(o options) []string {
+	var out []string
+	if o.devSet {
+		out = append(out, "--dev")
 	}
-	return ""
+	if flagGiven("no-terminal") {
+		out = append(out, "--no-terminal")
+	}
+	if o.tokenSet {
+		out = append(out, "--token")
+	}
+	return out
 }
 
 // join hands these repositories to the server that is already running, says what
 // happened, and leaves.
-func join(url string, roots []string, open bool) {
+func join(url string, roots []string, open bool, ignored []string) {
 	fmt.Fprintf(os.Stderr, "\n  \033[1mworkmux\033[0m — already running at \033[36m%s\033[0m\n", url)
 	failed := false
 	for _, root := range roots {
@@ -426,6 +425,16 @@ func join(url string, roots []string, open bool) {
 			what = "added"
 		}
 		fmt.Fprintf(os.Stderr, "  \033[2m%s\033[0m %s \033[2m(%s)\033[0m\n", what, res.Name, res.ID)
+	}
+	// What that server is won't match what this command line described. Say so
+	// here, next to the thing that happened, rather than leaving it to be noticed.
+	if len(ignored) > 0 {
+		fmt.Fprintf(os.Stderr, "  \033[33m%s had no effect\033[0m \033[2m— that server is "+
+			"already running, with its own settings.\033[0m\n", strings.Join(ignored, " and "))
+		if contains(ignored, "--dev") {
+			fmt.Fprint(os.Stderr, "  \033[2mIt serves its own frontend. To develop against "+
+				"this checkout, add --standalone and a free port.\033[0m\n")
+		}
 	}
 	fmt.Fprint(os.Stderr, "  \033[2mopen the page above — everything is on it.\n"+
 		"  workmux --standalone starts a separate server instead.\033[0m\n\n")
@@ -701,4 +710,14 @@ func openBrowser(url string) {
 			return
 		}
 	}
+}
+
+// contains reports whether a list holds a value.
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

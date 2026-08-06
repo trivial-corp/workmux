@@ -186,43 +186,49 @@ func has(list []string, want string) bool {
 	return false
 }
 
-// A flag that describes the server this process would be means "start one".
-//
-// This was a real bug: `make dev` handed its repository to the workmux already
-// running, which then served its own embedded frontend — so --dev did nothing at
-// all, and said nothing about it. Joining is only correct when the invocation
-// asked for nothing a running server can't already give it.
-func TestFlagsThatMeanStartAServer(t *testing.T) {
+// Running workmux in a second repository adds it to the one already running. That
+// is the whole feature, and no flag turns it into an error about a port — it
+// briefly did, and "add this repo" failing because something else is listening is
+// exactly the wrong shape. Flags a join can't honour get said out loud instead.
+func TestFlagsAJoinCannotHonour(t *testing.T) {
 	for _, tc := range []struct {
 		argv []string
-		want string
+		want []string
 	}{
-		{[]string{"--dev"}, "--dev"},
-		{[]string{"--dev=some/dir"}, "--dev"},
-		{[]string{"--no-terminal"}, "--no-terminal"},
-		{[]string{"--token", "abc"}, "--token"},
-		{[]string{"--token", ""}, "--token"}, // an empty token is still a decision
-		{[]string{}, ""},
-		{[]string{"--open"}, ""},
-		{[]string{"--port", "4400"}, ""}, // where, not what: joining one there is right
-		{[]string{"--host", "0.0.0.0"}, ""},
-		{[]string{"--root", "/tmp/x"}, ""},
+		{[]string{"--dev"}, []string{"--dev"}},
+		{[]string{"--dev=some/dir"}, []string{"--dev"}},
+		{[]string{"--no-terminal"}, []string{"--no-terminal"}},
+		{[]string{"--token", "abc"}, []string{"--token"}},
+		{[]string{"--token", ""}, []string{"--token"}}, // an empty token is still a decision
+		{[]string{"--dev", "--no-terminal"}, []string{"--dev", "--no-terminal"}},
+		{[]string{}, nil},
+		{[]string{"--open"}, nil},
+		{[]string{"--port", "4400"}, nil},
+		{[]string{"--host", "0.0.0.0"}, nil},
+		{[]string{"--root", "/tmp/x"}, nil},
 	} {
 		reset()
 		o, err := parseArgs(tc.argv)
 		if err != nil {
 			t.Fatalf("%v: %v", tc.argv, err)
 		}
-		if got := ownServerFlag(o); got != tc.want {
-			t.Errorf("ownServerFlag(%v) = %q, want %q", tc.argv, got, tc.want)
+		got := ignoredByJoining(o)
+		if len(got) != len(tc.want) {
+			t.Errorf("ignoredByJoining(%v) = %v, want %v", tc.argv, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("ignoredByJoining(%v) = %v, want %v", tc.argv, got, tc.want)
+				break
+			}
 		}
 	}
 }
 
-// The environment must not turn every invocation into its own server. Someone with
-// WORKMUX_TERMINAL=0 in a shell profile would otherwise get a server per repository
-// — the exact thing this is all meant to stop.
-func TestTheEnvironmentDoesNotForceAServer(t *testing.T) {
+// The environment is not a flag. WORKMUX_TERMINAL=0 in a shell profile shouldn't
+// put a warning on every invocation about something the user didn't type.
+func TestTheEnvironmentIsNotAFlag(t *testing.T) {
 	reset()
 	defer reset()
 	os.Setenv("WORKMUX_TERMINAL", "0")
@@ -233,7 +239,7 @@ func TestTheEnvironmentDoesNotForceAServer(t *testing.T) {
 	if !o.noTerm {
 		t.Fatal("WORKMUX_TERMINAL=0 should still turn terminals off")
 	}
-	if got := ownServerFlag(o); got != "" {
-		t.Errorf("ownServerFlag = %q, want it to stay free to join", got)
+	if got := ignoredByJoining(o); len(got) != 0 {
+		t.Errorf("ignoredByJoining = %v, want nothing to warn about", got)
 	}
 }

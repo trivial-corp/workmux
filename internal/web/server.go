@@ -336,13 +336,15 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	}
 }
 
-// Listen serves until the process is told to stop. Timeouts are deliberately
-// absent on writes: sessions stream for hours.
-func (s *Server) Listen(addr string) error {
+// Serve runs until the process is told to stop. It takes a listener rather than an
+// address so the caller can find out whether the port is free *before* it announces
+// anything — a banner followed by "address already in use" reads as a server that
+// started and died. Timeouts are deliberately absent on writes: sessions stream for
+// hours.
+func (s *Server) Serve(ln net.Listener) error {
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 20 * time.Second,
 	}
-	return srv.ListenAndServe()
+	return srv.Serve(ln)
 }
