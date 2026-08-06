@@ -57,7 +57,10 @@ const (
 
 // Info is a session as the API describes it.
 type Info struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// Project is the repository this session belongs to. One server serves
+	// several, and the dock has to say which repo a shell is a shell in.
+	Project string `json:"project"`
 	Kind    Kind   `json:"kind"`
 	Title   string `json:"title"`
 	CWD     string `json:"cwd"`
@@ -70,11 +73,12 @@ type Info struct {
 
 // Session is one PTY and everyone watching it.
 type Session struct {
-	ID    string
-	Kind  Kind
-	Title string
-	CWD   string
-	Agent string
+	ID      string
+	Project string
+	Kind    Kind
+	Title   string
+	CWD     string
+	Agent   string
 
 	pty  *os.File
 	cmd  *exec.Cmd
@@ -99,10 +103,11 @@ type Viewer struct {
 
 // Spec describes a session to start.
 type Spec struct {
-	Kind  Kind
-	Title string
-	CWD   string
-	Agent string
+	Kind    Kind
+	Project string
+	Title   string
+	CWD     string
+	Agent   string
 	// Command is run through a login shell, so PATH is what a terminal would have
 	// (homebrew, nvm, asdf) rather than what this process inherited — which for a
 	// launchd- or systemd-started server is close to nothing. Empty means an
@@ -166,7 +171,8 @@ func (r *Registry) Start(spec Spec) (*Session, error) {
 	}
 
 	s := &Session{
-		ID: id, Kind: spec.Kind, Title: spec.Title, CWD: spec.CWD, Agent: spec.Agent,
+		ID: id, Project: spec.Project, Kind: spec.Kind, Title: spec.Title,
+		CWD: spec.CWD, Agent: spec.Agent,
 		pty: f, cmd: cmd, done: make(chan struct{}),
 		viewers: map[*Viewer]struct{}{}, cols: cols, rows: rows, modes: newModeSet(),
 	}
@@ -377,7 +383,7 @@ func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Info{
-		ID: s.ID, Kind: s.Kind, Title: s.Title, CWD: s.CWD, Agent: s.Agent,
+		ID: s.ID, Project: s.Project, Kind: s.Kind, Title: s.Title, CWD: s.CWD, Agent: s.Agent,
 		Alive: s.ended.IsZero(), Cols: s.cols, Rows: s.rows, Viewers: len(s.viewers),
 	}
 }

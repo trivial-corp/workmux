@@ -4,16 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/trivial-corp/workmux/internal/actions"
 	"github.com/trivial-corp/workmux/internal/mcp"
+	"github.com/trivial-corp/workmux/internal/project"
 )
-
-// Actions and MCP are optional the same way sessions are: nil means this build or
-// this project doesn't do them, and the routes don't exist rather than answering
-// "disabled".
-type Actions struct {
-	Runner *actions.Runner
-}
 
 func (s *Server) postJSON(w http.ResponseWriter, r *http.Request, into any) bool {
 	if r.Method != http.MethodPost {
@@ -29,7 +22,7 @@ func (s *Server) postJSON(w http.ResponseWriter, r *http.Request, into any) bool
 
 // handleNewWork is the button that starts everything: a worktree, its files, and an
 // agent on the task.
-func (s *Server) handleNewWork(w http.ResponseWriter, r *http.Request) {
+func handleNewWork(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name   string `json:"name"`
 		Prompt string `json:"prompt"`
@@ -38,18 +31,19 @@ func (s *Server) handleNewWork(w http.ResponseWriter, r *http.Request) {
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	out, err := s.Actions.Runner.NewWork(req.Name, req.Prompt, req.Base)
+	out, err := p.Runner.NewWork(req.Name, req.Prompt, req.Base)
 	if err != nil {
-		Journal.Note("new work refused: %s", err)
+		Journal.Note("new work in %s refused: %s", p.Name(), err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	Journal.Note("new work %s off %s, %d file(s) carried over", out.Branch, out.Base, out.Copied)
+	Journal.Note("new work %s/%s off %s, %d file(s) carried over",
+		p.Name(), out.Branch, out.Base, out.Copied)
 	writeJSON(w, http.StatusOK, out)
 }
 
 // handleStack runs a configured container action.
-func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
+func handleStack(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action string `json:"action"`
 		Slot   string `json:"slot"`
@@ -58,12 +52,12 @@ func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	if req.Path != "" && !s.knownWorktree(req.Path) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of this repository"})
+	if req.Path != "" && !p.Owns(req.Path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
 		return
 	}
-	Journal.Note("stack %s %s", req.Action, req.Slot)
-	out, err := s.Actions.Runner.Stack(req.Action, req.Slot, req.Path)
+	Journal.Note("stack %s %s in %s", req.Action, req.Slot, p.Name())
+	out, err := p.Runner.Stack(req.Action, req.Slot, req.Path)
 	if err != nil {
 		Journal.Note("stack %s failed: %s", req.Action, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -73,7 +67,7 @@ func (s *Server) handleStack(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdate merges a worktree's base branch in.
-func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
+func handleUpdate(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
 		Base string `json:"base"`
@@ -81,11 +75,11 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	if !s.knownWorktree(req.Path) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of this repository"})
+	if !p.Owns(req.Path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
 		return
 	}
-	out, err := s.Actions.Runner.MergeBase(req.Path, req.Base)
+	out, err := p.Runner.MergeBase(req.Path, req.Base)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -94,14 +88,14 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePR checks a pull request out into its own worktree.
-func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
+func handlePR(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Ref string `json:"ref"`
 	}
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	out, err := s.Actions.Runner.CheckoutPR(req.Ref)
+	out, err := p.Runner.CheckoutPR(req.Ref)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -111,14 +105,14 @@ func (s *Server) handlePR(w http.ResponseWriter, r *http.Request) {
 
 // ---- mcp ----
 
-func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request) {
+func handleMCPList(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"enabled": s.MCP.Enabled(),
-		"servers": s.MCP.List(r.URL.Query().Get("refresh") == "1"),
+		"enabled": p.MCP.Enabled(),
+		"servers": p.MCP.List(r.URL.Query().Get("refresh") == "1"),
 	})
 }
 
-func (s *Server) handleMCPAdd(w http.ResponseWriter, r *http.Request) {
+func handleMCPAdd(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name      string   `json:"name"`
 		Target    string   `json:"target"`
@@ -130,14 +124,14 @@ func (s *Server) handleMCPAdd(w http.ResponseWriter, r *http.Request) {
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	if err := s.MCP.Add(req.Name, req.Target, req.Transport, req.Scope, req.Env, req.Headers); err != nil {
+	if err := p.MCP.Add(req.Name, req.Target, req.Transport, req.Scope, req.Env, req.Headers); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-func (s *Server) handleMCPRemove(w http.ResponseWriter, r *http.Request) {
+func handleMCPRemove(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name  string `json:"name"`
 		Scope string `json:"scope"`
@@ -145,7 +139,7 @@ func (s *Server) handleMCPRemove(w http.ResponseWriter, r *http.Request) {
 	if !s.postJSON(w, r, &req) {
 		return
 	}
-	if err := s.MCP.Remove(req.Name, req.Scope); err != nil {
+	if err := p.MCP.Remove(req.Name, req.Scope); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

@@ -6,26 +6,35 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/trivial-corp/workmux/internal/agents"
-	"github.com/trivial-corp/workmux/internal/config"
+	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/testrepo"
 	"github.com/trivial-corp/workmux/internal/work"
 )
 
-func server(t *testing.T, token string) (*Server, http.Handler) {
+// serving builds a server over real repositories, one project per name.
+func serving(t *testing.T, token string, names ...string) (*Server, http.Handler, []string) {
 	t.Helper()
-	r := testrepo.New(t, "proj")
-	cfg, err := config.Load(r.Root)
+	var roots []string
+	for _, name := range names {
+		roots = append(roots, testrepo.New(t, name).Root)
+	}
+	set, err := project.New(roots)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{
-		Cfg:     cfg,
-		Builder: &work.Builder{Cfg: cfg, Agents: &agents.Reader{}, Terminal: true},
-		Token:   token,
-		Origins: []string{"http://127.0.0.1:4315"},
+		Projects: set,
+		Terminal: true,
+		Token:    token,
+		Origins:  []string{"http://127.0.0.1:4315"},
 	}
-	return s, s.Handler()
+	return s, s.Handler(), roots
+}
+
+func server(t *testing.T, token string) (*Server, http.Handler) {
+	t.Helper()
+	s, h, _ := serving(t, token, "proj")
+	return s, h
 }
 
 func TestWorkEndpoint(t *testing.T) {
@@ -39,12 +48,15 @@ func TestWorkEndpoint(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("content-type = %q", ct)
 	}
-	var v work.View
+	var v work.Overview
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
-		t.Fatalf("body is not the view: %v", err)
+		t.Fatalf("body is not the overview: %v", err)
 	}
-	if v.Name != "proj" || len(v.Work) != 1 {
-		t.Errorf("view = %+v", v)
+	if len(v.Projects) != 1 || v.Projects[0].Name != "proj" || len(v.Work) != 1 {
+		t.Errorf("overview = %+v", v)
+	}
+	if v.Work[0].Project != v.Projects[0].ID {
+		t.Errorf("work[0].project = %q, want %q", v.Work[0].Project, v.Projects[0].ID)
 	}
 	// Absent things must serialise as empty lists, not null: the frontend and the
 	// mobile app both iterate these without checking.
@@ -217,7 +229,7 @@ func TestHealthNeedsNoToken(t *testing.T) {
 func TestConfigEndpoint(t *testing.T) {
 	_, h := server(t, "")
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/config", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/p/proj/config", nil))
 	var got map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)

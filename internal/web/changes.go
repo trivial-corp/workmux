@@ -5,29 +5,30 @@ import (
 
 	"github.com/trivial-corp/workmux/internal/changes"
 	"github.com/trivial-corp/workmux/internal/gitx"
+	"github.com/trivial-corp/workmux/internal/project"
 )
 
 // handleChanges answers "what has this work done": status plus the commits its base
 // doesn't have.
-func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
+func handleChanges(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	if !s.knownWorktree(path) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of this repository"})
+	if !p.Owns(path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
 		return
 	}
 	base := r.URL.Query().Get("base")
 	if base == "" {
-		base = gitx.DefaultBranch(s.Cfg.Root)
+		base = gitx.DefaultBranch(p.Root())
 	}
 	writeJSON(w, http.StatusOK, changes.Read(path, base))
 }
 
 // handleDiff is one file, or one commit.
-func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
+func handleDiff(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	path := q.Get("path")
-	if !s.knownWorktree(path) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of this repository"})
+	if !p.Owns(path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
 		return
 	}
 	if rev := q.Get("rev"); rev != "" {
@@ -48,21 +49,4 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 		"diff": changes.FileDiff(path, file, q.Get("staged") == "1"),
 		"file": file,
 	})
-}
-
-// knownWorktree is the same boundary sessions use: a path from a request is only
-// ever one of this repository's own worktrees.
-func (s *Server) knownWorktree(path string) bool {
-	if path == "" {
-		return false
-	}
-	if s.Sessions != nil && s.Sessions.KnownDir != nil {
-		return s.Sessions.KnownDir(path)
-	}
-	for _, w := range gitx.Worktrees(s.Cfg.Root) {
-		if w.Path == path {
-			return true
-		}
-	}
-	return false
 }

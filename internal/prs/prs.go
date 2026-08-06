@@ -26,27 +26,34 @@ type PR struct {
 	Draft  bool   `json:"draft"`
 }
 
-var (
-	mu       sync.Mutex
+// The cache is keyed by repository. One server serves several, and a single set of
+// package-level variables handed project B the pull requests of whichever project
+// polled first — every branch matched against the wrong repo's PRs.
+type entry struct {
 	byBranch map[string]PR
 	open     []PR
 	fetched  time.Time
+}
+
+var (
+	mu    sync.Mutex
+	cache = map[string]entry{}
 )
 
 // Data returns PRs indexed by head branch, plus the open ones newest first.
 // Cached for 20s — it's a network round on every dashboard poll otherwise.
 func Data(root string) (map[string]PR, []PR) {
 	mu.Lock()
-	if !fetched.IsZero() && time.Since(fetched) < 20*time.Second {
+	if e, ok := cache[root]; ok && time.Since(e.fetched) < 20*time.Second {
 		defer mu.Unlock()
-		return byBranch, open
+		return e.byBranch, e.open
 	}
 	mu.Unlock()
 
 	index, openList := load(root)
 
 	mu.Lock()
-	byBranch, open, fetched = index, openList, time.Now()
+	cache[root] = entry{byBranch: index, open: openList, fetched: time.Now()}
 	mu.Unlock()
 	return index, openList
 }
@@ -96,10 +103,10 @@ func load(root string) (map[string]PR, []PR) {
 	return index, openList
 }
 
-// Invalidate forces the next Data call to ask gh again, for right after
-// something has opened or merged a PR.
-func Invalidate() {
+// Invalidate forces the next Data call for this repository to ask gh again, for
+// right after something has opened or merged a PR.
+func Invalidate(root string) {
 	mu.Lock()
-	fetched = time.Time{}
+	delete(cache, root)
 	mu.Unlock()
 }

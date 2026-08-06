@@ -15,7 +15,8 @@ nothing else.
 ```
 workmux init --dry-run     # look first
 workmux init               # write it, if there's anything to write
-workmux                    # serve the repo you're in
+workmux                    # serve the repo you're in — or add it to the
+                           # workmux already running, if there is one
 ```
 
 Then **start it and check the dashboard is right** — worktrees listed, the running
@@ -80,6 +81,11 @@ Run `make lint && make test` before committing. Both are what CI runs.
 - **JSON field names are a contract.** A browser is one client; a mobile app is
   another and can't update in lockstep. Empty lists serialise as `[]`, never
   `null` — clients iterate without checking.
+- **One server, several repositories.** Nothing may assume there is only one. A
+  handler is either about the server (`/api/…`) or about a project it was handed
+  (`/api/p/{project}/…`), and there is no third case that quietly means "the only
+  one there was". Anything cached per repository is keyed by root — the PR cache
+  was package-level and served project B whichever project polled first.
 
 ### Tests
 
@@ -101,17 +107,36 @@ nothing:
 ### Layout
 
 ```
-cmd/workmux        flags, banner, wiring
+cmd/workmux        flags, banner, wiring, join-or-serve
 internal/config    workmux.json + every default derived from the repo
 internal/gitx      worktrees, base branch, drift, origin URL
 internal/agents    which agents live where, which are working now
 internal/stack      compose projects, service health, slots
-internal/prs       pull requests via gh (optional)
-internal/work      the assembly and the ordering
+internal/prs       pull requests via gh (optional), cached per repository
+internal/work      the assembly and the ordering, per project and merged
+internal/project   one repository as the server holds it, and the set of them
+internal/instance  how a second workmux finds the first
 internal/web       HTTP, auth, the embedded frontend
 internal/initcmd   the bootstrap
 internal/testrepo  real git repos for tests
 ```
+
+### Several projects
+
+Running `workmux` in a second repository does not start a second server. It reads
+the URL the first one wrote to `$XDG_STATE_HOME/workmux/server.json`, checks a
+workmux is answering there, posts the repository to `/api/projects`, and exits.
+`--standalone` opts out in both directions.
+
+The set is therefore mutable while the server runs, which is why `project.Set`
+locks and why `List` hands back a copy: a poll must never see it half-changed. A
+project that arrives over HTTP has to come out identical to one that was there at
+startup — `Set.OnAdd` is what finishes the wiring the process does itself.
+
+The work list is merged across projects and ordered as one list, because "what
+wants me right now" doesn't stop at a repository boundary. Every `work.Item`
+carries its project id; a branch name identifies nothing on its own once there are
+two repos, and both of them have a `main`.
 
 ### Roadmap order
 

@@ -20,6 +20,9 @@ WorkingDirectory=%h/srv/myrepo
 # 0.0.0.0 means off-box requests need the token. Set one here rather than reading a
 # fresh one out of the logs on every restart.
 Environment=WORKMUX_TOKEN=change-me
+# Repeat --root for every repository this box should serve; they share one page.
+# Running workmux in another repo on this box adds it to this service rather than
+# starting a second one, so the list here is a starting set and not a limit.
 ExecStart=%h/.local/bin/workmux --host 0.0.0.0 --root %h/srv/myrepo
 Restart=on-failure
 RestartSec=5

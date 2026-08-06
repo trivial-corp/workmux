@@ -23,8 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trivial-corp/workmux/internal/config"
-	"github.com/trivial-corp/workmux/internal/mcp"
+	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/term"
 	"github.com/trivial-corp/workmux/internal/work"
 )
@@ -64,10 +63,13 @@ var loopback = map[string]bool{
 	"127.0.0.1": true, "::1": true, "localhost": true, "0:0:0:0:0:0:0:1": true,
 }
 
-// Server is one repository's dashboard.
+// Server is the dashboard for every repository this process serves.
 type Server struct {
-	Cfg     *config.Config
-	Builder *work.Builder
+	// Projects is what it serves. One is the ordinary case; the routes are the same
+	// shape either way, so nothing has to special-case the count.
+	Projects *project.Set
+	// Terminal says whether this server hands out shells at all.
+	Terminal bool
 	// Token is required from non-loopback clients. Empty disables the check, which
 	// is only sane when something in front is already authenticating.
 	Token string
@@ -83,12 +85,6 @@ type Server struct {
 	// Sessions serves terminals. Nil means --no-terminal, and then those routes
 	// don't exist at all rather than answering "disabled".
 	Sessions *Sessions
-	// Agents answers "which agent lives in this worktree", for resume.
-	Agents func(cwd string) (id string, ok bool)
-	// Actions performs everything that changes something. Nil disables those routes.
-	Actions *Actions
-	// MCP surfaces the agent's server registry.
-	MCP *mcp.Reader
 }
 
 // agentIDRe bounds what can be passed to an attach command.
@@ -96,11 +92,9 @@ var agentIDRe = regexp.MustCompile(`^[0-9a-fA-F-]{6,64}$`)
 
 // resolveResume answers "give me this worktree's agent": attach to the one that's
 // there, or start a fresh session rather than making the button a dead end.
-func (s *Server) resolveResume(cwd string) (term.Kind, string) {
-	if s.Agents != nil {
-		if id, ok := s.Agents(cwd); ok && agentIDRe.MatchString(id) {
-			return term.KindAttach, id
-		}
+func resolveResume(p *project.Project, cwd string) (term.Kind, string) {
+	if id, ok := p.Builder.AgentFor(cwd); ok && agentIDRe.MatchString(id) {
+		return term.KindAttach, id
 	}
 	return term.KindAgent, ""
 }
@@ -117,35 +111,72 @@ func (s *Server) assets() (fs.FS, error) {
 }
 
 // Handler wires the routes.
+//
+// Two shapes, and which one a route has says what it is about. /api/… is about the
+// server: the whole dashboard, its log, its sessions. /api/p/{project}/… is about
+// one repository, and the project is in the path rather than in a body or a header
+// so that every such request is legible in a log and repeatable with curl.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/work", s.guard(s.handleWork))
-	mux.HandleFunc("/api/config", s.guard(s.handleConfig))
+	mux.HandleFunc("/api/work", s.guard(s.handleOverview))
 	mux.HandleFunc("/api/health", s.handleHealth) // unguarded: for a proxy probe
-	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
-	mux.HandleFunc("/api/changes", s.guard(s.handleChanges))
-	mux.HandleFunc("/api/diff", s.guard(s.handleDiff))
 	mux.HandleFunc("/api/log", s.guard(s.handleLog))
-	mux.HandleFunc("/api/stacks", s.guard(s.handleStacks))
-	if s.Actions != nil {
-		mux.HandleFunc("/api/new", s.guard(s.handleNewWork))
-		mux.HandleFunc("/api/stack", s.guard(s.handleStack))
-		mux.HandleFunc("/api/update", s.guard(s.handleUpdate))
-		mux.HandleFunc("/api/pr", s.guard(s.handlePR))
-	}
-	if s.MCP != nil {
-		mux.HandleFunc("/api/mcp", s.guard(s.handleMCPList))
-		mux.HandleFunc("/api/mcp/add", s.guard(s.handleMCPAdd))
-		mux.HandleFunc("/api/mcp/remove", s.guard(s.handleMCPRemove))
-	}
+	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
+	mux.HandleFunc("/api/projects", s.guard(s.handleProjects))
+
+	mux.HandleFunc("/api/p/{project}/work", s.scoped(handleWork))
+	mux.HandleFunc("/api/p/{project}/config", s.scoped(handleConfig))
+	mux.HandleFunc("/api/p/{project}/changes", s.scoped(handleChanges))
+	mux.HandleFunc("/api/p/{project}/diff", s.scoped(handleDiff))
+	mux.HandleFunc("/api/p/{project}/stacks", s.scoped(handleStacks))
+	mux.HandleFunc("/api/p/{project}/mcp", s.scoped(handleMCPList))
+	mux.HandleFunc("/api/p/{project}/new", s.scoped(handleNewWork))
+	mux.HandleFunc("/api/p/{project}/stack", s.scoped(handleStack))
+	mux.HandleFunc("/api/p/{project}/update", s.scoped(handleUpdate))
+	mux.HandleFunc("/api/p/{project}/pr", s.scoped(handlePR))
+	mux.HandleFunc("/api/p/{project}/mcp/add", s.scoped(handleMCPAdd))
+	mux.HandleFunc("/api/p/{project}/mcp/remove", s.scoped(handleMCPRemove))
 	if s.Sessions != nil {
+		// A session belongs to a worktree, so starting one is about a project. Once
+		// it exists its id is the server's, and listing, killing and streaming it
+		// are not — a client holding an id shouldn't have to remember where it came
+		// from.
+		mux.HandleFunc("/api/p/{project}/session/new", s.scoped(handleSessionNew))
 		mux.HandleFunc("/api/session/list", s.guard(s.handleSessionList))
-		mux.HandleFunc("/api/session/new", s.guard(s.handleSessionNew))
 		mux.HandleFunc("/api/session/kill", s.guard(s.handleSessionKill))
 		mux.HandleFunc("/api/session/socket/", s.guard(s.handleSessionSocket))
 	}
 	mux.HandleFunc("/", s.guard(s.handleUI))
 	return mux
+}
+
+// handler is a request about one repository.
+type handler func(*Server, *project.Project, http.ResponseWriter, *http.Request)
+
+// scoped resolves {project} before the handler runs, so no handler has to wonder
+// whether it has one. An unknown id is a 404 naming what does exist: with several
+// projects served, a typo in an id is the likeliest thing to go wrong.
+func (s *Server) scoped(next handler) http.HandlerFunc {
+	return s.guard(func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("project")
+		p, ok := s.Projects.Get(id)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error": fmt.Sprintf("no project %q is being served", id),
+				"known": s.projectIDs(),
+			})
+			return
+		}
+		next(s, p, w, r)
+	})
+}
+
+func (s *Server) projectIDs() []string {
+	out := []string{}
+	for _, p := range s.Projects.List() {
+		out = append(out, p.ID)
+	}
+	return out
 }
 
 // guard applies the token rule and hands a token in the query straight into a
@@ -205,18 +236,35 @@ func (s *Server) OriginOK(origin string) bool {
 	return false
 }
 
-func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Builder.Build())
+// handleOverview is the dashboard: every project, and all of their work in one
+// ordered list.
+func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, work.Merge(s.Projects.Builders(), s.Terminal, build))
+}
+
+// handleWork is one project's own view, for a client that wants a single
+// repository rather than the whole server.
+func handleWork(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, p.Builder.Build())
 }
 
 // handleConfig is what the project looks like, for a client that wants to render
 // the right affordances before it has any work to show.
-func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Cfg)
+func handleConfig(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, p.Cfg)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": s.Cfg.Name})
+	names := []string{}
+	for _, p := range s.Projects.List() {
+		names = append(names, p.Name())
+	}
+	// "server" is an identity check, not decoration: a second workmux probes this
+	// port to decide whether to hand its repository over, and something else
+	// answering 200 must not be mistaken for one.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "server": "workmux", "projects": s.projectIDs(), "names": names,
+	})
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
