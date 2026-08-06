@@ -897,7 +897,7 @@ async function open(id) {
     });
     const fit = new GhosttyWeb.FitAddon();
     term.loadAddon(fit);
-    pane = { term, fit, ws: null, dead: false, wrap, wired: false };
+    pane = { term, fit, ws: null, dead: false, wrap, wired: false, at: null };
     PANES.set(id, pane);
     wirePane(id, pane);
     // macOS line-editing habits the browser swallows before the terminal sees them, mapped
@@ -947,18 +947,149 @@ async function open(id) {
 }
 
 // What the visible terminal says, for tests and for debugging by hand. A canvas has no
-// text to read, so it comes from the terminal's own buffer.
+// text to read, so it comes from the terminal's own buffer — cell by cell, rather than
+// by selecting everything and copying it: that answered "" until the renderer had
+// settled, and it threw away whatever you had selected on the way past.
 function screenText(id) {
   const p = PANES.get(id || ACTIVE);
   if (!p) return "";
-  p.term.selectAll();
-  const s = p.term.getSelection();
-  p.term.clearSelection();
-  return s;
+  const buf = p.term.buffer && p.term.buffer.active;
+  if (!buf) return "";
+  const out = [];
+  for (let y = 0; y < p.term.rows; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    let s = "";
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x);
+      const code = cell ? cell.getCodepoint() : 0;
+      s += code ? String.fromCodePoint(code) : " ";
+    }
+    out.push(s.replace(/\s+$/, ""));
+  }
+  return out.join("\n").replace(/\n+$/, "");
 }
 
 // The empty state is a sibling of the panes, not a replacement for them.
 function hideHollow() { const h = $("term").querySelector(".hollow"); if (h) h.remove(); }
+
+// ---- the mouse ------------------------------------------------------------
+//
+// A full-screen program asks for the mouse (DECSET 1000/1002/1003, SGR encoding with
+// 1006) and from then on it owns it: the wheel scrolls *its* transcript, a click hits
+// whatever it drew there. ghostty-web implements no reporting side at all, and instead
+// substitutes arrow keys for the wheel whenever the alternate screen is up — so
+// scrolling an agent's output typed Up-arrow into its prompt, four per notch, and no
+// click ever reached the program. Both of those are this, and the modes are read from
+// the program's own output because nothing else knows them.
+// Ghostty's own parser already knows which modes are set, so ask it rather than
+// re-reading the byte stream on the way past: a second parser would have to be taught
+// about escapes split across two frames, resets, and the alternate screen, and would
+// disagree with the renderer the first time it got one of them wrong.
+function tracking(pane) {
+  try {
+    if (!pane.term.hasMouseTracking()) return 0;
+    return pane.term.getMode(1003) ? 1003 : pane.term.getMode(1002) ? 1002 : 1000;
+  } catch { return 0; }
+}
+
+function sgrMouse(pane) {
+  try { return pane.term.getMode(1006); } catch { return false; }
+}
+
+function paneAt(e) {
+  const wrap = e.target.closest && e.target.closest(".wrap");
+  return wrap ? PANES.get(wrap.dataset.session) : null;
+}
+
+// 1-based, the way the protocol counts.
+function cellAt(pane, e) {
+  const cv = pane.wrap.querySelector("canvas");
+  if (!cv) return null;
+  const r = cv.getBoundingClientRect();
+  const clamp = (v, hi) => Math.min(Math.max(v, 1), hi);
+  return {
+    col: clamp(Math.floor((e.clientX - r.left) / (r.width / pane.term.cols)) + 1, pane.term.cols),
+    row: clamp(Math.floor((e.clientY - r.top) / (r.height / pane.term.rows)) + 1, pane.term.rows),
+  };
+}
+
+const mouseMods = (e) => (e.altKey ? 8 : 0) + (e.ctrlKey || e.metaKey ? 16 : 0);
+
+function mouseReport(pane, btn, c, press) {
+  if (sgrMouse(pane)) return `\x1b[<${btn};${c.col};${c.row}${press ? "M" : "m"}`;
+  // The original encoding spends one byte per coordinate, so past column 223 there is
+  // nothing truthful to send. Say nothing rather than report the wrong cell.
+  if (c.col > 223 || c.row > 223) return "";
+  return "\x1b[M" + String.fromCharCode(32 + (press ? btn : 3), 32 + c.col, 32 + c.row);
+}
+
+// Shift is the way out, as it is in every terminal: it always means "this one is mine,
+// don't give it to the program", which is what leaves selection possible at all while
+// an agent is holding the mouse.
+const mouseIsOurs = (pane, e) => !pane || !tracking(pane) || e.shiftKey;
+
+function reportButton(e, press) {
+  const pane = paneAt(e);
+  if (mouseIsOurs(pane, e)) return;
+  const c = cellAt(pane, e);
+  if (!c) return;
+  const btn = (e.button === 1 ? 1 : e.button === 2 ? 2 : 0) + mouseMods(e);
+  const seq = mouseReport(pane, btn, c, press);
+  if (seq) send(pane, new TextEncoder().encode(seq));
+  // Stop here: the terminal's own selection would otherwise start on the same press
+  // the program is being told about, and you'd be doing two things with one click.
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+// The vendor opens a link only on ⌘-click. In a browser a link is a link — and it opens
+// in a new tab, because navigating this one away would take the dashboard and every
+// attached session with it.
+async function openLinkAt(pane, e) {
+  const det = pane.term.linkDetector;
+  if (!det || !pane.term.wasmTerm) return false;
+  const c = cellAt(pane, e);
+  if (!c) return false;
+  const sb = pane.term.wasmTerm.getScrollbackLength();
+  const top = Math.max(0, Math.floor(pane.term.getViewportY ? pane.term.getViewportY() : 0));
+  const y = c.row - 1;
+  const abs = top > 0 ? (y < top ? sb - top + y : sb + y - top) : sb + y;
+  let link = null;
+  try { link = await det.getLinkAt(c.col - 1, abs); } catch { return false; }
+  if (!link || !link.text) return false;
+  window.open(link.text, "_blank", "noopener,noreferrer");
+  return true;
+}
+
+// One set of listeners for every pane, on the container: the terminal registers its own
+// in the capture phase on the pane itself, and a parent's capture runs first, which is
+// the only place these can win from.
+function wireMouse() {
+  const box = $("term");
+  box.addEventListener("mousedown", (e) => reportButton(e, true), true);
+  box.addEventListener("mouseup", (e) => reportButton(e, false), true);
+  box.addEventListener("mousemove", (e) => {
+    const pane = paneAt(e);
+    if (mouseIsOurs(pane, e)) return;
+    // 1002 is "while a button is down", 1003 is "always". Neither wants a report per
+    // pixel: the program is drawing cells, so it hears about the mouse when it changes
+    // cell.
+    const track = tracking(pane);
+    if (track === 1002 ? !e.buttons : track !== 1003) return;
+    const c = cellAt(pane, e);
+    if (!c || (pane.at && pane.at.col === c.col && pane.at.row === c.row)) return;
+    pane.at = c;
+    const held = e.buttons & 2 ? 2 : e.buttons & 4 ? 1 : e.buttons ? 0 : 3;
+    const seq = mouseReport(pane, held + 32 + mouseMods(e), c, true);
+    if (seq) send(pane, new TextEncoder().encode(seq));
+  }, true);
+  box.addEventListener("click", (e) => {
+    const pane = paneAt(e);
+    if (!pane || tracking(pane) || e.shiftKey) return;   // the program's click, or a selection
+    void openLinkAt(pane, e);
+  }, true);
+}
 
 function connect(id, pane) {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -1010,6 +1141,24 @@ function wirePane(id, pane) {
     // backgrounded tab, reporting one is how the PTY oscillated between two sizes.
     if (document.hidden || ACTIVE !== id) return;
     send(pane, JSON.stringify({ t: "size", cols, rows }));
+  });
+  pane.term.attachCustomWheelEventHandler((e) => {
+    // false hands it back to the terminal, which scrolls its own scrollback — right for
+    // a shell, and the only thing to do when no program has asked for the wheel.
+    if (mouseIsOurs(pane, e)) return false;
+    const c = cellAt(pane, e);
+    if (!c) return false;
+    const cell = pane.wrap.querySelector("canvas").getBoundingClientRect().height / pane.term.rows;
+    const lines = e.deltaMode === 0 ? Math.abs(e.deltaY) / cell
+                : e.deltaMode === 1 ? Math.abs(e.deltaY)
+                : Math.abs(e.deltaY) * pane.term.rows;
+    const btn = (e.deltaY < 0 ? 64 : 65) + mouseMods(e);
+    const seq = mouseReport(pane, btn, c, true);
+    if (seq) {
+      const enc2 = new TextEncoder();
+      for (let i = Math.min(Math.max(Math.round(lines), 1), 5); i > 0; i--) send(pane, enc2.encode(seq));
+    }
+    return true;
   });
 }
 
@@ -1144,7 +1293,7 @@ const KEYS = [["esc", "\x1b"], ["tab", "\t"], ["⌃C", "\x03"], ["⌃D", "\x04"]
               ["←", "\x1b[D"], ["→", "\x1b[C"], ["⏎", "\r"]];
 // A chord nobody knows about may as well not exist, so the pane says what it has.
 const CHORD_HELP = "⌘⏎ newline · ⇧⏎ newline · ⌘←/→ line start/end · ⌥←/→ by word · " +
-                   "⌘⌫ kill line · ⌥⌫ kill word · paste an image to send its path";
+                   "⌘⌫ kill line · ⌥⌫ kill word · ⇧drag to select · paste an image to send its path";
 function renderKeys() {
   const box = $("keys");
   box.textContent = "";
@@ -1523,6 +1672,8 @@ function renderKeysSheet() {
     ["⌘N", "New work"],
     ["Esc", "Close this"],
     ["⌃C / ⌃D", "Interrupt, end of input — sent to the program, not the browser"],
+    ["⇧ drag", "Select text while a program is holding the mouse"],
+    ["Click a link", "Opens in a new tab. A program that wants clicks gets them instead"],
     ["Paste an image", "Goes to the agent through your clipboard"],
   ];
   for (const [k, what] of rows) {
@@ -1576,6 +1727,7 @@ if (window.visualViewport) {
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
+wireMouse();
 poll(true);
 // Six seconds, and nothing at all while the tab is in the background — a dashboard
 // nobody is looking at doesn't need to ask.
