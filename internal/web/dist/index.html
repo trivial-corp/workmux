@@ -595,8 +595,18 @@ const selected = () => WORK.find(w => w.path === SEL) || null;
 // than the server: it's a fact about you, not about the repo, and the answer it gives is
 // the one the names can't — "this is the one you were in before".
 const SEEN_KEY = "workmux.seen";
-let SEEN = {};
+const LAST_KEY = "workmux.last";
+let SEEN = {}, LAST = {};
 try { SEEN = JSON.parse(localStorage.getItem(SEEN_KEY) || "{}") || {}; } catch { SEEN = {}; }
+try { LAST = JSON.parse(localStorage.getItem(LAST_KEY) || "{}") || {}; } catch { LAST = {}; }
+
+// Which session you were last in, per worktree. Ids only mean anything to the server
+// that issued them, so a stale one simply doesn't match anything alive and is ignored.
+function markSession(path, id) {
+  if (!path || !id) return;
+  LAST[path] = id;
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(LAST)); } catch {}
+}
 
 function markSeen(path) {
   if (!path) return;
@@ -624,13 +634,15 @@ function ago(ms) {
   return d === 1 ? "yesterday" : d + "d ago";
 }
 
-// The session to show for a piece of work: the agent you're attached to, else whatever
-// is open. Switching work used to land on "pick a session" even when that work had
-// exactly one — which is never the answer you wanted.
+// The session to show for a piece of work: the one you were last in, then the agent,
+// then whatever is open. Switching work used to land on "pick a session" even when that
+// work had exactly one — and then, once it stopped doing that, on the first session
+// every time, so a second session was something you had to re-find on every switch.
 function sessionFor(path) {
   const mine = SESSIONS.filter(s => s.cwd === path && s.alive);
-  // The agent first, then the newest thing you opened — ids ascend, so that's the last.
-  return mine.find(s => s.kind === "attach") ||
+  const last = mine.find(s => s.id === LAST[path]);
+  // The agent next, then the newest thing you opened — ids ascend, so that's the last.
+  return last || mine.find(s => s.kind === "attach") ||
          mine.slice().sort((a, b) => cmpId(b.id, a.id))[0] || null;
 }
 
@@ -660,16 +672,37 @@ function showWork(mayStart) {
 
 let SESSIG = null;
 async function refreshSessions(quiet) {
-  let list = [];
+  let list = [], answered = true;
   try {
     const d = await (await fetch("/api/session/list")).json();
     list = d.sessions || [];
-  } catch { list = []; }   // --no-terminal: the route isn't there at all
+  } catch { list = []; answered = false; }   // --no-terminal: the route isn't there at all
+  if (answered) forgetVanished(list);
   const sig = JSON.stringify(list.map(s => [s.id, s.title, s.alive, s.cwd]));
   const changed = sig !== SESSIG;
   SESSIG = sig;
   SESSIONS = list;
   if (changed || !quiet) renderBar();
+}
+
+// A restarted server has no memory of the sessions it was running: their ids belong to
+// nothing now, and a pane holding one would retry forever against a session that cannot
+// come back. When the server has answered and an id isn't in the answer, the pane goes,
+// and the surface shows what does exist instead of a dead terminal.
+function forgetVanished(list) {
+  const live = new Set(list.map(s => s.id));
+  let lostActive = false;
+  for (const [id, pane] of [...PANES]) {
+    if (live.has(id)) continue;
+    pane.exited = true;
+    clearTimeout(pane.retryTimer);
+    if (pane.ws) { try { pane.ws.close(); } catch {} }
+    pane.wrap.remove();
+    pane.term.dispose();
+    PANES.delete(id);
+    if (ACTIVE === id) { ACTIVE = null; lostActive = true; }
+  }
+  if (lostActive) showWork(false);
 }
 
 // One switch, rendered into whichever toolbar is showing, so it never moves.
@@ -942,7 +975,12 @@ async function kill(id) {
   // Gone from the row immediately. Waiting for the next poll to agree left a tab you
   // had just closed sitting there, which reads as the close not working.
   const p = PANES.get(id);
-  if (p) { p.wrap.remove(); p.term.dispose(); PANES.delete(id); }
+  if (p) {
+    p.exited = true;
+    clearTimeout(p.retryTimer);
+    if (p.ws) { try { p.ws.close(); } catch {} }
+    p.wrap.remove(); p.term.dispose(); PANES.delete(id);
+  }
   SESSIONS = SESSIONS.filter(s => s.id !== id);
   if (ACTIVE === id) ACTIVE = null;
   renderBar();
@@ -957,6 +995,7 @@ async function kill(id) {
 async function open(id) {
   ACTIVE = id;
   markSeen(SEL);
+  markSession(SEL, id);
   setSurface("session");
   const box = $("term");
   hideHollow();
@@ -985,6 +1024,9 @@ async function open(id) {
     const CHORDS = [
       [e => e.metaKey && e.key === "Enter", "\x1b\r"],      // newline, don't submit
       [e => e.shiftKey && e.key === "Enter", "\x1b\r"],     // same, for a phone
+      // Ghostty sends a plain tab for ⇧⇥, the same byte as ⇥ — so a program that cycles
+      // a mode on back-tab never heard about it, and got a completion request instead.
+      [e => e.shiftKey && e.key === "Tab", "\x1b[Z"],       // back-tab
       [e => e.metaKey && e.key === "ArrowLeft", "\x01"],     // start of line (⌃A)
       [e => e.metaKey && e.key === "ArrowRight", "\x05"],    // end of line (⌃E)
       [e => e.metaKey && e.key === "Backspace", "\x15"],     // kill to start (⌃U)
@@ -1016,13 +1058,31 @@ async function open(id) {
   }
   // Two frames: the wrapper has just become visible, and fitting against a box that
   // is still zero-sized is how a session ends up 80×24 inside a wide window.
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    try { pane.fit.fit(); } catch {}
-    pane.term.focus();
-  }));
+  await twoFrames();
+  try { pane.fit.fit(); } catch {}
+  // Fit before attaching, not after. The attach carries the size in its query string, so
+  // attaching first told the server the size the pane used to be — and the server decides
+  // from that whether its buffer can be replayed into this terminal at all.
   if (!pane.ws || pane.ws.readyState > 1) connect(id, pane);
+  focusPane(pane);
   renderBar();
   renderKeys();
+}
+
+const twoFrames = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+// Focus, and mean it. term.focus() is a no-op while the element is still being laid out,
+// and a pane you cannot type into until you switch away and back is indistinguishable
+// from a broken session.
+function focusPane(pane) {
+  const tryIt = () => {
+    if (!pane.wrap.isConnected || !pane.wrap.classList.contains("on")) return true;
+    pane.term.focus();
+    return pane.wrap.contains(document.activeElement) || document.activeElement === pane.wrap;
+  };
+  if (tryIt()) return;
+  let n = 0;
+  const timer = setInterval(() => { if (tryIt() || ++n > 20) clearInterval(timer); }, 50);
 }
 
 // What the visible terminal says, for tests and for debugging by hand. A canvas has no
@@ -1178,6 +1238,9 @@ function connect(id, pane) {
   ws.binaryType = "arraybuffer";
   pane.ws = ws;
   ws.onopen = () => {
+    pane.retry = 0;
+    pane.dead = false;
+    renderBar();
     // The server replays the scrollback on attach, so clear first or a reconnect
     // paints everything twice.
     pane.term.reset();
@@ -1192,14 +1255,29 @@ function connect(id, pane) {
     if (typeof ev.data === "string") {
       let msg = {};
       try { msg = JSON.parse(ev.data); } catch { return; }
-      if (msg.t === "exit") { pane.dead = true; refreshSessions(); }
+      // The program ended. That's the one close worth believing, so stop trying.
+      if (msg.t === "exit") { pane.dead = true; pane.exited = true; refreshSessions(); }
       return;
     }
     // Bytes, not a decoded string: a multi-byte character split across two frames
     // decodes to garbage if each frame is decoded on its own. The terminal reassembles.
     pane.term.write(new Uint8Array(ev.data));
   };
-  ws.onclose = () => { pane.dead = true; renderBar(); };
+  ws.onclose = () => { pane.dead = true; renderBar(); reconnect(id, pane); };
+}
+
+// A socket closes for two different reasons and they need opposite answers: the program
+// finished, or something in between dropped — the server restarted, the laptop slept, a
+// proxy timed an idle connection out. Only the first is permanent, and treating both that
+// way left a live session sitting dead in a pane until you switched away and back.
+function reconnect(id, pane) {
+  if (pane.exited || PANES.get(id) !== pane) return;
+  clearTimeout(pane.retryTimer);
+  pane.retry = Math.min((pane.retry || 0) + 1, 10);
+  pane.retryTimer = setTimeout(() => {
+    if (pane.exited || PANES.get(id) !== pane) return;
+    connect(id, pane);
+  }, Math.min(400 * pane.retry, 4000));
 }
 
 // Input is wired to the *pane*, once, and never to the connection.
@@ -1228,14 +1306,23 @@ function wirePane(id, pane) {
     const c = cellAt(pane, e);
     if (!c) return false;
     const cell = pane.wrap.querySelector("canvas").getBoundingClientRect().height / pane.term.rows;
-    const lines = e.deltaMode === 0 ? Math.abs(e.deltaY) / cell
-                : e.deltaMode === 1 ? Math.abs(e.deltaY)
-                : Math.abs(e.deltaY) * pane.term.rows;
-    const btn = (e.deltaY < 0 ? 64 : 65) + mouseMods(e);
+    const lines = e.deltaMode === 1 ? e.deltaY
+                : e.deltaMode === 2 ? e.deltaY * pane.term.rows
+                : e.deltaY / cell;
+    // A trackpad reports a few pixels per event, dozens of times a second. Rounding each
+    // of those up to a line — the smallest thing the protocol can say — turned a gentle
+    // two-finger drag into a page-a-flick. So the fractions are added up and only whole
+    // lines are sent; the remainder waits for the next event.
+    if ((pane.wheelAcc || 0) * lines < 0) pane.wheelAcc = 0;   // direction changed
+    pane.wheelAcc = (pane.wheelAcc || 0) + lines;
+    let whole = Math.trunc(pane.wheelAcc);
+    pane.wheelAcc -= whole;
+    if (!whole) return true;
+    const btn = (whole < 0 ? 64 : 65) + mouseMods(e);
     const seq = mouseReport(pane, btn, c, true);
     if (seq) {
       const enc2 = new TextEncoder();
-      for (let i = Math.min(Math.max(Math.round(lines), 1), 5); i > 0; i--) send(pane, enc2.encode(seq));
+      for (let i = Math.min(Math.abs(whole), 5); i > 0; i--) send(pane, enc2.encode(seq));
     }
     return true;
   });
@@ -1372,7 +1459,7 @@ const KEYS = [["esc", "\x1b"], ["tab", "\t"], ["⌃C", "\x03"], ["⌃D", "\x04"]
               ["←", "\x1b[D"], ["→", "\x1b[C"], ["⏎", "\r"]];
 // A chord nobody knows about may as well not exist, so the pane says what it has.
 const CHORD_HELP = "⌘⏎ newline · ⇧⏎ newline · ⌘←/→ line start/end · ⌥←/→ by word · " +
-                   "⌘⌫ kill line · ⌥⌫ kill word · ⇧drag to select · paste an image to send its path";
+                   "⌘⌫ kill line · ⇧⇥ back-tab · ⇧drag to select · paste an image to send its path";
 function renderKeys() {
   const box = $("keys");
   box.textContent = "";

@@ -34,6 +34,11 @@ const (
 	KindAttach Kind = "attach" // take over an agent that's already running
 	KindLogs   Kind = "logs"   // tail this work's containers
 	KindGit    Kind = "git"    // a git TUI, for people who want one
+	// KindMCPAuth finishes an OAuth round that needs the redirect URL pasted back.
+	// It's a session rather than a background call because the paste is the point:
+	// the CLI holds the PKCE verifier, so whatever prints the URL must be the same
+	// process that reads the answer.
+	KindMCPAuth Kind = "mcpauth"
 )
 
 // Limits chosen for the failure they prevent, not for elegance.
@@ -77,6 +82,7 @@ type Session struct {
 
 	mu      sync.Mutex
 	buf     []byte // scrollback ring, oldest trimmed
+	modes   *modeSet
 	viewers map[*Viewer]struct{}
 	ended   time.Time
 	cols    int
@@ -162,7 +168,7 @@ func (r *Registry) Start(spec Spec) (*Session, error) {
 	s := &Session{
 		ID: id, Kind: spec.Kind, Title: spec.Title, CWD: spec.CWD, Agent: spec.Agent,
 		pty: f, cmd: cmd, done: make(chan struct{}),
-		viewers: map[*Viewer]struct{}{}, cols: cols, rows: rows,
+		viewers: map[*Viewer]struct{}{}, cols: cols, rows: rows, modes: newModeSet(),
 	}
 	r.mu.Lock()
 	r.byID[id] = s
@@ -204,6 +210,7 @@ func (s *Session) pump() {
 func (s *Session) broadcast(chunk []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.modes.feed(chunk)
 	s.buf = append(s.buf, chunk...)
 	if len(s.buf) > scrollback {
 		s.buf = append([]byte(nil), s.buf[len(s.buf)-scrollback:]...)
@@ -219,12 +226,28 @@ func (s *Session) broadcast(chunk []byte) {
 	}
 }
 
-// Attach registers a viewer and returns the scrollback to paint first, so a
-// reload shows what the session already said instead of an empty pane.
+// Attach registers a viewer and returns what it should paint first, so a reload shows
+// what the session already said instead of an empty pane.
+//
+// For a program on the alternate screen that buffer is not scrollback. It is a reel of
+// frames drawn with absolute cursor moves for whatever width the terminal had at the
+// time, and replaying it lays every one of those frames over the others — which is only
+// harmless if nothing has resized since the oldest byte in it. Nothing guarantees that,
+// and when it isn't true the pane comes back unreadable: two renderings of the same text
+// interleaved character by character.
+//
+// So a full-screen program's viewer is told what kind of terminal it has and given a
+// clear screen, and the program paints the only frame that was ever current (see Nudge).
+// A program with real scrollback still gets it, at any width — that's what scrollback is.
 func (s *Session) Attach(cols, rows int) (*Viewer, []byte) {
 	v := &Viewer{Out: make(chan []byte, 256), cols: cols, rows: rows, sess: s}
 	s.mu.Lock()
-	replay := append([]byte(nil), s.buf...)
+	var replay []byte
+	if s.modes.alt() {
+		replay = append(s.modes.prologue(), []byte("\x1b[2J\x1b[H")...)
+	} else {
+		replay = append([]byte(nil), s.buf...)
+	}
 	if s.ended.IsZero() {
 		s.viewers[v] = struct{}{}
 	} else {
