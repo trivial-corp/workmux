@@ -71,8 +71,20 @@ main { flex:1 1 auto; display:grid; min-height:0;
 main .changes { display:none; }
 main[data-surface="changes"] .changes { display:flex; }
 main[data-surface="changes"] .pane { display:none; }
-.list, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
-.list { overflow-y:auto; border-right:1px solid var(--line); background:var(--panel); }
+.side, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
+.side { border-right:1px solid var(--line); background:var(--panel); }
+.list { flex:1 1 auto; overflow-y:auto; min-height:0; }
+/* New work and the filter live over the list they act on, not in the far corner of the
+   window. The filter is the answer to a long list: the names are the agent's, they change,
+   and scrolling forty of them to find one is not finding it. */
+.lhead { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:9px 10px;
+         border-bottom:1px solid var(--line); }
+.lhead .b.primary { flex:0 0 auto; }
+.lhead input { flex:1 1 auto; min-width:0; height:30px; padding:0 9px; border-radius:var(--r);
+               border:1px solid var(--line); background:var(--ink); color:var(--t1);
+               font:inherit; font-size:12px; }
+.lhead input::placeholder { color:var(--t3); }
+.lhead input:focus { outline:none; border-color:var(--accent); }
 .changes { background:var(--panel); }
 
 /* ── bands: the ordering, made visible ───────────────────────────────────── */
@@ -117,6 +129,14 @@ main[data-surface="changes"] .pane { display:none; }
                 font-family:var(--mono); font-size:10.5px; color:var(--t3); }
 .chip { display:inline-flex; align-items:center; gap:4px; }
 .chip.state { color:var(--wants); }
+.seg button .lbl { display:inline-block; max-width:22ch; overflow:hidden; text-overflow:ellipsis;
+                   white-space:nowrap; vertical-align:bottom; }
+/* inline-block, or the width is ignored: the tab is not a flex container, and an inline
+   <i> with a width is a dot nobody can see. */
+.seg button .dot.wants { display:inline-block; width:6px; height:6px; margin-right:2px;
+                         background:var(--wants); vertical-align:middle; }
+.seg button .dot.other { opacity:.65; }
+.popover .mrow.wants .mh { color:var(--wants); }
 .chip.app { color:var(--up); }
 .chip.pr { color:var(--t3); }
 .chip.pr::before { content:""; }
@@ -286,8 +306,8 @@ nav { display:none; }
      the work list and the diff ended up stacked on top of each other.
      Class selectors, not `main > *`: a class beats an element whatever the order, so
      the base `.list { display:flex }` was quietly winning against it. */
-  main .list, main .pane, main .changes { display:none; }
-  main[data-surface="work"] .list,
+  main .side, main .pane, main .changes { display:none; }
+  main[data-surface="work"] .side,
   main[data-surface="session"] .pane,
   main[data-surface="changes"] .changes { display:flex; }
   .keys { display:flex; }
@@ -308,7 +328,7 @@ nav { display:none; }
   .b.wide { display:none; }
   .b.narrow { display:inline-block; }
 }
-body.full header, body.full .list, body.full .changes, body.full nav { display:none; }
+body.full header, body.full .side, body.full .changes, body.full nav { display:none; }
 body.full main { grid-template-columns:1fr; }
 body.full main .pane { display:flex; }
 /* Its own target, with its own edge — it opens a menu while the label beside it
@@ -354,8 +374,6 @@ body.full main .pane { display:flex; }
   <div class="brand"><span class="proj" id="proj">…</span><span class="tool">workmux</span></div>
   <div class="stats" id="stats"></div>
   <div class="acts">
-    <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
-      ＋<span class="lbl"> New work</span></button>
     <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">▤ Stacks</button>
   <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
       ◇<span class="lbl"> MCP</span></button>
@@ -375,7 +393,15 @@ body.full main .pane { display:flex; }
 </div>
 
 <main id="main" data-surface="work">
-  <div class="list" id="list"><div class="hollow"><p>Reading worktrees…</p></div></div>
+  <div class="side">
+    <div class="lhead">
+      <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
+        ＋<span class="lbl"> New work</span></button>
+      <input id="filter" type="search" placeholder="Filter (/)" autocomplete="off"
+             spellcheck="false" aria-label="Filter worktrees">
+    </div>
+    <div class="list" id="list"><div class="hollow"><p>Reading worktrees…</p></div></div>
+  </div>
   <div class="pane">
     <div class="bar" id="bar"></div>
     <div class="term" id="term"></div>
@@ -405,7 +431,7 @@ const el = (t, c, ...kids) => {
 };
 const $ = (id) => document.getElementById(id);
 
-let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null;
+let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null, FILTER = "";
 const PANES = new Map();   // session id → {term, fit, ws, dead}
 
 // ---- work ----
@@ -509,6 +535,16 @@ const BANDS = [
   { key:"base",  label:"Base checkout", tone:"base", has:() => false },
 ];
 
+// What the filter matches: the branch, what the agent last said, its name, and the PR
+// numbers. All four are things you'd type looking for a piece of work.
+function matches(w, q) {
+  if (!q) return true;
+  const hay = [w.branch, w.base, (w.agents || []).map(a => (a.name || "") + " " + (a.detail || "")).join(" "),
+               (w.prs || []).map(n => "#" + n).join(" "), w.stack ? w.stack.slot : ""].join(" ").toLowerCase();
+  // Every word has to appear, so a second word narrows instead of widening.
+  return q.toLowerCase().split(/\s+/).filter(Boolean).every(t => hay.includes(t));
+}
+
 function renderWork() {
   const list = $("list");
   list.textContent = "";
@@ -516,9 +552,16 @@ function renderWork() {
     list.append(el("div", "hollow", "No worktrees yet."));
     return;
   }
+  const q = FILTER.trim();
+  const shown = WORK.filter(w => matches(w, q));
+  if (!shown.length) {
+    list.append(el("div", "hollow", el("h3", null, "Nothing matches “" + q + "”."),
+                                    el("p", null, String(WORK.length) + " worktrees are hidden.")));
+    return;
+  }
   const taken = new Set();
   for (const band of BANDS) {
-    const rows = WORK.filter(w => {
+    const rows = shown.filter(w => {
       if (taken.has(w.path)) return false;
       const mine = band.key === "base" ? w.is_default : (!w.is_default && band.has(w));
       if (mine) taken.add(w.path);
@@ -713,9 +756,19 @@ function tabs(active) {
 
   // Session is a menu: the agent is the default, and everything else a session can be
   // lives behind the caret rather than as four more buttons in the row.
-  const sess = el("button", null, "Session");
+  //
+  // The tab is named after the session you are in, not numbered. "Session 3" is an
+  // ordinal for something that has a name, and with two agents running it told you
+  // nothing about which one you were looking at — or which was waiting on you.
+  const cur = mine.find(s => s.id === ACTIVE);
+  const sess = el("button", null);
   sess.setAttribute("aria-current", active === "session" ? "true" : "false");
-  if (mine.length) sess.append(el("span", "n", String(mine.length)));
+  if (cur && sessionWaiting(cur, w)) sess.append(el("i", "dot wants"));
+  sess.append(el("span", "lbl", cur ? sessionLabel(cur, w) : "Session"));
+  if (cur && !cur.alive) sess.append(el("span", "n", "ended"));
+  else if (!cur && mine.length) sess.append(el("span", "n", String(mine.length)));
+  // Another one is waiting on you, and it's behind the caret.
+  if (mine.some(s => s !== cur && sessionWaiting(s, w))) sess.append(el("i", "dot wants other"));
   sess.append(el("span", "caret", "▾"));
   // The label goes there, the caret opens the menu. Making the label do both meant
   // clicking a tab to get back to your terminal popped a menu you didn't ask for.
@@ -766,7 +819,8 @@ function menu(anchor, items) {
   const m = el("div", "popover");
   for (const it of items) {
     if (it.sep) { m.append(el("div", "msep")); continue; }
-    const row = el("button", "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : ""));
+    const row = el("button", "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : "") +
+                              (it.wants ? " wants" : ""));
     row.append(el("span", "ml", it.label));
     if (it.hint) row.append(el("span", "mh", it.hint));
     row.disabled = !!it.disabled;
@@ -785,8 +839,13 @@ function sessionMenu(anchor, w, mine) {
   const caps = STATE.agent || {};
   const items = [];
   for (const s of mine) {
-    items.push({ label: sessionLabel(s, w), hint: s.id === ACTIVE ? "open" : "", on: s.id === ACTIVE,
-                 go: () => open(s.id) });
+    items.push({
+      label: sessionLabel(s, w),
+      hint: sessionWaiting(s, w) ? "needs you" : (s.id === ACTIVE ? "open" : ""),
+      wants: sessionWaiting(s, w),
+      on: s.id === ACTIVE,
+      go: () => open(s.id),
+    });
   }
   if (mine.length) items.push({ sep: true });
   const attached = mine.some(s => s.kind === "attach");
@@ -868,12 +927,6 @@ function renderBar() {
     return b;
   };
 
-  // What this session is, so the row says something when a pane is open.
-  if (ACTIVE) {
-    const s = mine.find(x => x.id === ACTIVE);
-    if (s) bar.append(el("span", "who", sessionLabel(s, w) + (s.alive ? "" : " · ended")));
-  }
-
   // Then the app, then the branch. Grouped, so a destructive button never sits next
   // to the one you press all the time.
   if (STATE.stack_enabled) {
@@ -907,6 +960,14 @@ function sessionLabel(s, w) {
     return (STATE.agent && STATE.agent.name) || "agent";
   }
   return s.title || s.kind;
+}
+
+// Whether this session is the one waiting on you. An attach is an agent, and the agent
+// says so itself; anything else is a shell, and a shell waits on you by definition.
+function sessionWaiting(s, w) {
+  if (!s || s.kind !== "attach" || !w) return false;
+  const a = (w.agents || []).find(x => x.id === s.agent);
+  return (a ? a.tempo : w.tempo) === "blocked";
 }
 
 async function stackAction(action, w) {
@@ -2033,10 +2094,12 @@ function renderKeysSheet() {
   body.className = "sbody"; body.textContent = ""; foot.textContent = "";
   const rows = [
     ["⌘⏎ / ⇧⏎", "New line, without submitting"],
+    ["⇧⇥", "Back-tab — what an agent cycles its mode on"],
     ["⌘← / ⌘→", "Start and end of the line"],
     ["⌥← / ⌥→", "A word at a time"],
     ["⌘⌫ / ⌥⌫", "Kill the line, kill a word"],
     ["⌘N", "New work"],
+    ["/", "Filter the work list"],
     ["Esc", "Close this"],
     ["⌃C / ⌃D", "Interrupt, end of input — sent to the program, not the browser"],
     ["⇧ drag", "Select text while a program is holding the mouse"],
@@ -2057,6 +2120,19 @@ document.addEventListener("keydown", (e) => {
   // ⌘N for new work, the one thing you start from anywhere. Not while typing in a
   // terminal, which owns its keystrokes.
   if ((e.metaKey || e.ctrlKey) && e.key === "n") { e.preventDefault(); openSheet("new"); }
+  // "/" reaches the filter — but only from outside a terminal, which owns every key it
+  // is given, slash included.
+  if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+    const inTerm = document.activeElement && document.activeElement.closest &&
+                   document.activeElement.closest("#term");
+    const typing = document.activeElement &&
+                   /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+    if (inTerm || typing) return;
+    e.preventDefault();
+    setSurface("work");
+    $("filter").focus();
+    $("filter").select();
+  }
 });
 
 function setSurface(which) {
@@ -2095,6 +2171,10 @@ if (window.visualViewport) {
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
 wireMouse();
+$("filter").addEventListener("input", (e) => { FILTER = e.target.value; renderWork(); });
+$("filter").addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.stopPropagation(); FILTER = ""; e.target.value = ""; renderWork(); }
+});
 poll(true);
 // Six seconds, and nothing at all while the tab is in the background — a dashboard
 // nobody is looking at doesn't need to ask.
