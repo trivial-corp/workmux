@@ -8,331 +8,415 @@
 <style>
 /* workmux — a patch bay for parallel work.
  *
- * The design idea: each piece of work is a channel strip. A status rail down its
- * left edge carries the one thing you need at a glance, the machine strings
- * (branches, shas, slots, counts) are set in mono because they *are* the content,
- * and colour is spent only on state — never on decoration. Strips are grouped into
- * bands, so the ordering the server computes is visible instead of implied.
+ * The design idea is unchanged: each piece of work is a channel strip, a status
+ * rail down its left edge carries the one thing you need at a glance, machine
+ * strings (branches, shas, slots, counts) are set in mono because they *are*
+ * the content, and colour is spent only on state — never on decoration.
+ *
+ * The execution follows shadcn/ui conventions, written out by hand because this
+ * page ships inside the binary and loads nothing: one token block below, one
+ * control height, one radius scale, one focus ring, and elevation that comes
+ * from a background step plus a shadow. Components derive everything from the
+ * tokens — a rule that picks its own colour is a bug.
  */
 :root {
   color-scheme: dark;
-  --ink:#0A0C0F; --panel:#11151A; --elev:#161B22; --elev-2:#1B212A;
-  --line:#212932; --line-soft:#181E26;
-  --t1:#E4E9F0; --t2:#A9B4C4; --t3:#77839A;
-  --wants:#F0B429; --live:#2ED3C6; --idle:#5C6675; --up:#4ADE80;
-  --danger:#F27272; --accent:#8AA0FF;
+  /* surfaces — each step visibly above the one before */
+  --bg:#0B0D11; --surface:#12151C; --card:#171C24; --raised:#1E242E;
+  --popover:#191E27;
+  /* lines */
+  --border:#29303C; --border-soft:#1E242E; --input:#2C3442;
+  /* ink */
+  --fg:#EAEEF5; --fg-muted:#A6B0C2; --fg-faint:#6C7789;
+  /* the solid button face (shadcn primary: light on dark) */
+  --primary:#E8ECF5; --primary-fg:#101319;
+  /* colour is state: waiting, working, app up, broken — plus one interactive accent */
+  --wants:#FBBF24; --live:#2DD4BF; --up:#4ADE80; --danger:#F87171;
+  --accent:#8FA7FF; --ring:#8FA7FF;
+  --rail-idle:#3A4350;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --r:7px;
+  --r-lg:12px; --r:8px; --r-sm:6px;
+  --shadow-sm:0 1px 2px rgb(0 0 0 / .35);
+  --shadow-md:0 4px 12px rgb(0 0 0 / .4), 0 16px 48px rgb(0 0 0 / .5);
+  --shadow-lg:0 8px 24px rgb(0 0 0 / .4), 0 32px 80px rgb(0 0 0 / .55);
 }
 * { box-sizing:border-box; min-width:0; }
 html, body { height:100%; }
-body { margin:0; background:var(--ink); color:var(--t1); font:13px/1.5 var(--sans);
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 var(--sans);
        overflow:hidden; display:flex; flex-direction:column;
        -webkit-font-smoothing:antialiased; }
 button { font:inherit; color:inherit; }
-::selection { background:#2b3a55; }
+a { color:var(--accent); }
+::selection { background:#2C3B58; }
+
+/* Inline icons: one size, one stroke weight, everywhere. Text glyphs (▤ ◇ ↻)
+   rendered at whatever size the font fancied, which is a lot of why the chrome
+   looked off. */
+.ic, .caret { display:inline-flex; flex:0 0 auto; align-items:center; }
+.ic svg, .caret svg { width:14px; height:14px; display:block; fill:none;
+  stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.caret svg { width:12px; height:12px; opacity:.55; }
+
+/* One focus ring. Form fields swap it for a border glow, below. */
+:is(button, a, summary):focus-visible { outline:2px solid var(--ring); outline-offset:1px; }
+
+/* Thin scrollbars, so a dense pane doesn't grow a chrome gutter. */
+.list, .chbody, .sbody, .diff { scrollbar-width:thin; scrollbar-color:#2B3340 transparent; }
+:is(.list, .chbody, .sbody, .diff)::-webkit-scrollbar { width:8px; height:8px; }
+:is(.list, .chbody, .sbody, .diff)::-webkit-scrollbar-thumb {
+  background:#2B3340; border-radius:4px; }
 
 /* ── header ──────────────────────────────────────────────────────────────── */
 header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12px;
-         height:46px; border-bottom:1px solid var(--line); background:var(--panel); }
+         height:48px; border-bottom:1px solid var(--border-soft); background:var(--surface); }
 .brand { font-family:var(--mono); font-size:13px; letter-spacing:-0.01em; white-space:nowrap;
-         display:flex; align-items:baseline; gap:5px; flex:0 0 auto; }
-.brand .proj { font-weight:600; color:var(--t1); font:inherit; font-weight:600;
-               background:none; border:0; padding:2px 5px; margin-left:-5px; border-radius:5px;
-               cursor:pointer; display:flex; align-items:baseline; gap:5px; }
-.brand .proj:hover { background:var(--elev-2); }
-.brand .proj .caret { border-left:0; padding-left:0; margin-left:0; }
-/* Which repo a row belongs to. Only drawn when there is more than one, so a
-   single-project server looks exactly as it did. */
-.strip .pj { font-family:var(--mono); font-size:10px; color:var(--t3); padding:1px 5px;
-             border:1px solid var(--line); border-radius:4px; white-space:nowrap; }
-.brand .tool { color:var(--t3); font-size:11px; }
+         display:flex; align-items:center; gap:6px; flex:0 0 auto; }
+.brand .proj { font:inherit; font-weight:600; color:var(--fg); background:none; border:0;
+               padding:4px 7px; margin-left:-7px; border-radius:var(--r-sm); cursor:pointer;
+               display:flex; align-items:center; gap:6px; }
+.brand .proj:hover { background:var(--card); }
+.brand .tool { color:var(--fg-faint); font-size:11px; }
 .stats { display:flex; gap:0; align-items:center; flex:1 1 auto; overflow:hidden;
-         font-family:var(--mono); font-size:11px; color:var(--t3); }
-.stats span { padding:0 9px; border-left:1px solid var(--line-soft); white-space:nowrap; }
+         font-family:var(--mono); font-size:11px; color:var(--fg-faint); }
+.stats span { padding:0 10px; border-left:1px solid var(--border-soft); white-space:nowrap; }
 .stats span:first-child { border-left:0; padding-left:0; }
 .acts { display:flex; gap:6px; flex:0 0 auto; }
 
-/* ── buttons: one shape, three weights ───────────────────────────────────── */
-.b { background:transparent; border:1px solid var(--line); border-radius:var(--r);
-     padding:4px 9px; font-size:12px; cursor:pointer; white-space:nowrap;
-     color:var(--t2); transition:border-color .12s, color .12s, background .12s;
-     flex:0 0 auto; }
-.b:hover { border-color:#31404f; color:var(--t1); background:var(--elev); }
-.b:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-.b.primary { border-color:#37436b; color:#c9d4ff; background:#1a1f33; }
-.b.primary:hover { border-color:var(--accent); }
-.b.danger:hover { border-color:#5c2b2b; color:var(--danger); background:#1e1315; }
-.b.on { border-color:var(--accent); color:#cfe0ff; }
-.b.dead { color:var(--t3); text-decoration:line-through; }
-.b.icon { font-family:var(--mono); }
+/* ── buttons: one shape, a few weights ───────────────────────────────────── */
+.b { display:inline-flex; align-items:center; justify-content:center; gap:6px;
+     height:28px; padding:0 10px; background:transparent;
+     border:1px solid var(--border); border-radius:var(--r);
+     font-size:12px; font-weight:500; color:var(--fg-muted); cursor:pointer;
+     white-space:nowrap; text-decoration:none; flex:0 0 auto;
+     transition:border-color .12s, color .12s, background .12s; }
+.b:hover { border-color:#39424F; color:var(--fg); background:var(--card); }
+.b.icon { width:28px; padding:0; }
+.b.primary { background:var(--primary); border-color:transparent; color:var(--primary-fg);
+             font-weight:600; }
+.b.primary:hover { background:#fff; color:var(--primary-fg); }
+.b.on { background:color-mix(in oklab, var(--accent) 15%, transparent);
+        border-color:color-mix(in oklab, var(--accent) 40%, transparent); color:#C9D5FF; }
+.b.on:hover { border-color:var(--accent); color:#DDE5FF; }
+.b.danger:hover { border-color:color-mix(in oklab, var(--danger) 45%, transparent);
+                  color:var(--danger);
+                  background:color-mix(in oklab, var(--danger) 10%, transparent); }
+/* A button that destroys something says so before you hover it, unlike the ones
+   that merely stop a container. */
+.b.destroy { background:#DC2626; border-color:transparent; color:#fff; font-weight:600; }
+.b.destroy:hover { background:#EF4444; color:#fff; }
+.b.dead { color:var(--fg-faint); text-decoration:line-through; }
 .b[disabled] { opacity:.5; cursor:default; }
+/* A count is data, not an alarm: the same weight as every other number in the row. */
+.b .badge { margin-left:2px; font-family:var(--mono); font-size:10.5px; color:var(--fg-faint); }
 .group { display:flex; gap:6px; padding-right:8px; margin-right:2px; flex:0 0 auto;
-         border-right:1px solid var(--line-soft); }
+         border-right:1px solid var(--border-soft); }
 .group:last-child { border-right:0; padding-right:0; }
 
 /* ── layout ──────────────────────────────────────────────────────────────── */
 main { flex:1 1 auto; display:grid; min-height:0;
-       grid-template-columns:minmax(0,304px) minmax(0,1fr); }
+       grid-template-columns:minmax(0,320px) minmax(0,1fr); }
 /* The session and the diff share one column, switched by the tabs in the toolbar. */
 main .changes { display:none; }
 main[data-surface="changes"] .changes { display:flex; }
 main[data-surface="changes"] .pane { display:none; }
 .side, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
-.side { border-right:1px solid var(--line); background:var(--panel); }
+.side { border-right:1px solid var(--border-soft); background:var(--surface); }
 .list { flex:1 1 auto; overflow-y:auto; min-height:0; }
 /* New work and the filter live over the list they act on, not in the far corner of the
    window. The filter is the answer to a long list: the names are the agent's, they change,
    and scrolling forty of them to find one is not finding it. */
-.lhead { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:9px 10px;
-         border-bottom:1px solid var(--line); }
-.lhead .b.primary { flex:0 0 auto; }
-.lhead input { flex:1 1 auto; min-width:0; height:30px; padding:0 9px; border-radius:var(--r);
-               border:1px solid var(--line); background:var(--ink); color:var(--t1);
+.lhead { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:10px;
+         border-bottom:1px solid var(--border-soft); }
+.lhead .b.primary { height:32px; padding:0 11px; }
+.lhead input { flex:1 1 auto; min-width:0; height:32px; padding:0 10px; border-radius:var(--r);
+               border:1px solid var(--input); background:var(--bg); color:var(--fg);
                font:inherit; font-size:12px; }
-.lhead input::placeholder { color:var(--t3); }
-.lhead input:focus { outline:none; border-color:var(--accent); }
-.changes { background:var(--panel); }
+.lhead input::placeholder { color:var(--fg-faint); }
+.changes { background:var(--surface); }
+
+/* ── form fields: one look, one ring ─────────────────────────────────────── */
+.lhead input:focus, .sheet textarea:focus, .sheet input:focus, .sheet select:focus {
+  outline:none; border-color:var(--ring);
+  box-shadow:0 0 0 3px color-mix(in oklab, var(--ring) 22%, transparent); }
 
 /* ── bands: the ordering, made visible ───────────────────────────────────── */
-.band { border-bottom:1px solid var(--line-soft); padding:0 0 6px; }
+.band { border-bottom:1px solid var(--border-soft); padding:0 0 6px; }
 .band:last-child { border-bottom:0; }
-.band > h2 { margin:0; padding:12px 12px 6px; font:inherit; font-size:10px; font-weight:600;
-             letter-spacing:.15em; text-transform:uppercase; color:var(--t3);
+.band > h2 { margin:0; padding:14px 12px 7px; font:inherit; font-size:10px; font-weight:600;
+             letter-spacing:.12em; text-transform:uppercase; color:var(--fg-faint);
              display:flex; align-items:center; gap:8px; }
-.band > h2 .count { font-family:var(--mono); letter-spacing:0; font-weight:400; opacity:.7; }
-.band > h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
+.band > h2 .count { font-family:var(--mono); letter-spacing:0; font-weight:400; opacity:.8; }
+.band > h2::after { content:""; flex:1 1 auto; height:1px; background:var(--border-soft); }
 .band[data-tone="wants"] > h2 { color:var(--wants); }
 
 /* ── the channel strip ───────────────────────────────────────────────────── */
-.strip { display:flex; gap:10px; padding:7px 12px 8px 0; cursor:pointer; position:relative;
-         border-left:0; }
-.strip:hover { background:var(--elev); }
-.strip[aria-selected="true"] { background:var(--elev-2); box-shadow:inset 0 0 0 1px #2b3444; }
-.strip[aria-selected="true"] .rail { width:3px; box-shadow:0 0 10px 0 currentColor; }
+.strip { display:flex; gap:11px; padding:9px 12px 10px 0; cursor:pointer; position:relative; }
+.strip:hover { background:var(--card); }
+.strip[aria-selected="true"] { background:var(--raised);
+                               box-shadow:inset 0 1px 0 var(--border-soft),
+                                          inset 0 -1px 0 var(--border-soft); }
+.strip[aria-selected="true"] .rail { flex-basis:4px; box-shadow:0 0 12px 0 currentColor; }
 .strip[aria-selected="true"] .branch { color:#fff; }
-.strip .rail { flex:0 0 3px; border-radius:0 2px 2px 0; background:var(--idle);
-               margin-right:1px; }
-.strip[data-tone="wants"] .rail { background:var(--wants); }
-.strip[data-tone="live"]  .rail { background:var(--live); }
-.strip[data-tone="up"]    .rail { background:var(--up); }
-.strip[data-tone="base"]  .rail { background:#2a313b; }
+.strip .rail { flex:0 0 3px; border-radius:0 3px 3px 0; background:var(--rail-idle);
+               color:var(--rail-idle); margin-right:1px; }
+.strip[data-tone="wants"] .rail { background:var(--wants); color:var(--wants); }
+.strip[data-tone="live"]  .rail { background:var(--live); color:var(--live); }
+.strip[data-tone="up"]    .rail { background:var(--up); color:var(--up); }
+.strip[data-tone="base"]  .rail { background:#2A313C; color:#2A313C; }
 /* The one moving thing in the interface: work in progress breathes. */
 @media (prefers-reduced-motion: no-preference) {
   .strip[data-tone="live"] .rail { animation:breathe 2.6s ease-in-out infinite; }
 }
 @keyframes breathe { 0%,100% { opacity:1 } 50% { opacity:.45 } }
-.strip .body { flex:1 1 auto; display:grid; gap:3px; min-width:0; }
+.strip .body { flex:1 1 auto; display:grid; gap:4px; min-width:0; }
 .strip .head { display:flex; align-items:baseline; gap:8px; min-width:0; }
 .strip .seen { margin-left:auto; flex:0 0 auto; font-family:var(--mono); font-size:10px;
-               color:var(--t3); white-space:nowrap; }
+               color:var(--fg-faint); white-space:nowrap; }
 .strip .seen.last { color:var(--wants); }
-.strip { position:relative; }
-/* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width box
-   floating above its own label. */
-.sbody label.check { display:flex; gap:9px; align-items:center; margin:2px 0;
-                     font-size:12.5px; color:var(--t2); cursor:pointer; }
-.sheet .check input { width:15px; height:15px; flex:0 0 auto; accent-color:var(--danger); }
-/* A button that destroys something says so before you hover it, unlike the ones that
-   merely stop a container. */
-.b.destroy { border-color:#5c2b2b; color:#ff9d9d; background:#1e1315; }
-.b.destroy:hover { border-color:#8a3a3a; color:#ffc2c2; background:#2a1618; }
-.strip .rowmenu { position:absolute; top:6px; right:4px; width:24px; height:22px; padding:0;
-                  border:0; border-radius:6px; background:none; color:var(--t3);
-                  font-size:13px; line-height:1; opacity:0; cursor:pointer; }
+/* Which repo a row belongs to. Only drawn when there is more than one, so a
+   single-project server looks exactly as it did. */
+.strip .pj { font-family:var(--mono); font-size:9.5px; color:var(--fg-faint); padding:1px 6px;
+             border:1px solid var(--border); border-radius:999px; white-space:nowrap; }
+.strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--fg);
+                 overflow-wrap:anywhere; min-width:0; }
+.strip[data-tone="base"] .branch { font-weight:400; color:var(--fg-muted); }
+.strip .said { font-size:12px; color:var(--fg-muted); overflow:hidden;
+               text-overflow:ellipsis; white-space:nowrap; }
+.strip .rowmenu { position:absolute; top:8px; right:6px; width:24px; height:24px; padding:0;
+                  display:inline-flex; align-items:center; justify-content:center;
+                  border:0; border-radius:var(--r-sm); background:none; color:var(--fg-faint);
+                  opacity:0; cursor:pointer; }
 .strip:hover .rowmenu, .strip .rowmenu:focus-visible, .strip[aria-selected="true"] .rowmenu {
   opacity:1; }
-.strip .rowmenu:hover { background:var(--elev-2); color:var(--t1); }
+.strip .rowmenu:hover { background:var(--raised); color:var(--fg); }
 /* Reaching for it must not run into the timestamp underneath. */
-.strip:hover .seen, .strip[aria-selected="true"] .seen { padding-right:22px; }
-.strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--t1);
-                 overflow-wrap:anywhere; min-width:0; }
-.strip[data-tone="base"] .branch { font-weight:400; color:var(--t2); }
-.strip .said { font-size:11.5px; color:var(--t2); overflow:hidden; text-overflow:ellipsis;
-               white-space:nowrap; }
-.strip .chips { display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center;
-                font-family:var(--mono); font-size:10.5px; color:var(--t3); }
-.chip { display:inline-flex; align-items:center; gap:4px; }
-.chip.state { color:var(--wants); }
-.seg button .lbl { display:inline-block; max-width:22ch; overflow:hidden; text-overflow:ellipsis;
-                   white-space:nowrap; vertical-align:bottom; }
-/* inline-block, or the width is ignored: the tab is not a flex container, and an inline
-   <i> with a width is a dot nobody can see. */
-.seg button .dot.wants { display:inline-block; width:6px; height:6px; margin:0 5px 1px 0;
-                         background:var(--wants); vertical-align:middle; flex:0 0 auto; }
-/* One waiting behind the menu rather than in front of you: same colour, hollow, and it
-   sits after the count instead of being crushed against it. */
-.seg button .dot.other { margin:0 0 1px 7px; background:none;
-                         box-shadow:inset 0 0 0 2px var(--wants); }
-.popover .mrow.wants .mh { color:var(--wants); }
-.chip.app { color:var(--up); }
-.chip.pr { color:var(--t3); }
-.chip.pr::before { content:""; }
+.strip:hover .seen, .strip[aria-selected="true"] .seen { padding-right:24px; }
+
+/* ── chips: state as a badge, not a floating word ────────────────────────── */
+.strip .chips { display:flex; flex-wrap:wrap; gap:4px 5px; align-items:center; margin-top:1px; }
+.chip { display:inline-flex; align-items:center; gap:5px; height:18px; padding:0 7px;
+        border-radius:999px; font-family:var(--mono); font-size:10px;
+        color:var(--fg-faint);
+        border:1px solid color-mix(in oklab, var(--fg-faint) 30%, transparent);
+        background:color-mix(in oklab, var(--fg-faint) 7%, transparent); }
+.chip .dot { width:5px; height:5px; }
+.chip.state { color:var(--wants);
+              border-color:color-mix(in oklab, var(--wants) 35%, transparent);
+              background:color-mix(in oklab, var(--wants) 10%, transparent); }
+/* "working" is the live colour, not the waiting one — they answer different questions. */
+.strip[data-tone="live"] .chip.state { color:var(--live);
+              border-color:color-mix(in oklab, var(--live) 35%, transparent);
+              background:color-mix(in oklab, var(--live) 10%, transparent); }
+.chip.app { color:var(--up);
+            border-color:color-mix(in oklab, var(--up) 35%, transparent);
+            background:color-mix(in oklab, var(--up) 10%, transparent); }
 .dot { width:5px; height:5px; border-radius:50%; background:currentColor; flex:0 0 auto; }
 
 /* ── session pane ────────────────────────────────────────────────────────── */
-.bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:7px 10px;
-       border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:none;
-       background:var(--panel); }
+.bar { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:8px 10px;
+       border-bottom:1px solid var(--border-soft); overflow-x:auto; scrollbar-width:none;
+       background:var(--surface); }
 .bar::-webkit-scrollbar { display:none; }
-.bar .who { font-family:var(--mono); font-size:11px; color:var(--t3); white-space:nowrap;
+.bar .who { font-family:var(--mono); font-size:11px; color:var(--fg-faint); white-space:nowrap;
             overflow:hidden; text-overflow:ellipsis; }
-.seg { display:flex; flex:0 0 auto; border:1px solid var(--line); border-radius:var(--r);
-       overflow:hidden; }
-.seg button { background:transparent; border:0; padding:4px 11px; font-size:12px;
-              color:var(--t3); cursor:pointer; white-space:nowrap; }
-.seg button + button { border-left:1px solid var(--line); }
-.seg button[aria-current="true"] { background:var(--elev-2); color:var(--t1); }
-.seg .n { font-family:var(--mono); font-size:10.5px; opacity:.7; margin-left:5px; }
-.tabs { display:flex; gap:2px; flex:0 0 auto; align-items:stretch; }
-.tab { display:inline-flex; align-items:center; gap:7px; background:transparent; border:0;
-       border-bottom:2px solid transparent; padding:5px 10px 4px; font-size:12px;
-       color:var(--t3); cursor:pointer; white-space:nowrap; max-width:26ch; }
-.tab:hover { color:var(--t1); }
-.tab[aria-current="true"] { color:var(--t1); border-bottom-color:var(--accent); }
-.tab .nm { overflow:hidden; text-overflow:ellipsis; }
-.tab .x { color:var(--t3); font-size:11px; padding:0 1px; border-radius:3px; }
-.tab .x:hover { color:var(--danger); background:#1e1315; }
-.tab.dead .nm { text-decoration:line-through; opacity:.6; }
+/* The surface switch, boxed the way a tab list is: quiet triggers, and the active
+   one lifted onto its own surface. */
+.seg { display:flex; flex:0 0 auto; gap:2px; padding:3px; background:var(--card);
+       border:1px solid var(--border-soft); border-radius:10px; }
+.seg button { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 11px;
+              background:transparent; border:0; border-radius:7px; font-size:12px;
+              font-weight:500; color:var(--fg-muted); cursor:pointer; white-space:nowrap; }
+.seg button:hover { color:var(--fg); }
+.seg button[aria-current="true"] { background:var(--raised); color:var(--fg);
+                                   box-shadow:var(--shadow-sm); }
+.seg button .lbl { display:inline-block; max-width:22ch; overflow:hidden;
+                   text-overflow:ellipsis; white-space:nowrap; }
+.seg .n { font-family:var(--mono); font-size:10px; color:var(--fg-faint);
+          padding:1px 5px; border-radius:999px;
+          background:color-mix(in oklab, var(--fg-faint) 12%, transparent); }
+/* The session that wants you, when it's the one you're in… */
+.seg button .dot.wants { width:6px; height:6px; background:var(--wants); }
+/* …and when it's waiting behind the menu: same colour, hollow. */
+.seg button .dot.other { background:none; box-shadow:inset 0 0 0 2px var(--wants); }
+.popover .mrow.wants .mh { color:var(--wants); }
 @media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
-.term { flex:1 1 auto; min-height:0; background:var(--ink); overflow:hidden; position:relative; }
+
+.term { flex:1 1 auto; min-height:0; background:var(--bg); overflow:hidden; position:relative; }
 /* One wrapper per session, created once and kept. A terminal cannot be re-opened by calling
    open() twice, and clearing the container to re-open it is how a pane came back
    blank after you switched tabs and returned. */
 .wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; display:none; }
 .wrap.on { display:block; }
 .wrap canvas { display:block; }
-.hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
-.hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
-.hollow p { margin:0; font-size:12.5px; color:var(--t3); }
-.hollow h3 { font-family:var(--mono); font-size:13px; color:var(--t1); }
-.facts { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr; gap:5px 14px;
+
+/* ── empty states: centred, and they say what to do ──────────────────────── */
+.hollow { padding:20px 16px; max-width:56ch; display:grid; gap:10px;
+          justify-items:start; }
+.hollow h3 { margin:0; font-family:var(--mono); font-size:13px; font-weight:600;
+             color:var(--fg); }
+.hollow p { margin:0; font-size:12.5px; color:var(--fg-muted); line-height:1.6; }
+/* In the terminal's box it floats in the middle rather than hiding in a corner
+   of a large dark pane. max-width moves to the children: on the absolutely
+   positioned box itself it caps the whole grid, which anchors it to the left. */
+.term > .hollow { position:absolute; inset:0; max-width:none; place-content:center;
+                  padding:24px; }
+.term > .hollow > * { max-width:56ch; }
+.term .empty { position:absolute; inset:0; display:grid; place-content:center;
+               color:var(--danger); font-size:12.5px; padding:24px; }
+/* Inside a sheet the body already has its padding; the hollow only keeps its rhythm. */
+.sbody > .hollow { padding:2px 0; }
+.facts { margin:2px 0 0; display:grid; grid-template-columns:auto 1fr; gap:6px 14px;
          font-family:var(--mono); font-size:11.5px; align-items:baseline; }
-.facts dt { color:var(--t3); text-align:right; }
-.facts dd { margin:0; color:var(--t2); overflow-wrap:anywhere; }
-.keys { display:none; gap:5px; padding:7px 10px; border-top:1px solid var(--line);
+.facts dt { color:var(--fg-faint); text-align:right; }
+.facts dd { margin:0; color:var(--fg-muted); overflow-wrap:anywhere; }
+.term .facts { padding:14px 16px; background:var(--surface);
+               border:1px solid var(--border-soft); border-radius:var(--r-lg); }
+
+.keys { display:none; gap:6px; padding:8px 10px; border-top:1px solid var(--border-soft);
         flex:0 0 auto; overflow-x:auto; scrollbar-width:none;
         /* Opaque and above the terminal: it was transparent, so the last rows of
            output were visible through the keys and looked like overlap. */
-        background:var(--panel); position:relative; z-index:2; }
+        background:var(--surface); position:relative; z-index:2; }
 .keys::-webkit-scrollbar { display:none; }
-.keys .b { min-width:3.2em; text-align:center; font-family:var(--mono); padding:6px 8px; }
+.keys .b { min-width:3.2em; height:34px; text-align:center; font-family:var(--mono); }
 
 /* ── changes ─────────────────────────────────────────────────────────────── */
 .chbody { flex:1 1 auto; overflow-y:auto; padding:0 0 12px; }
-.chsect { padding:12px 12px 5px; font-size:10px; font-weight:600; letter-spacing:.15em;
-          text-transform:uppercase; color:var(--t3); display:flex; gap:8px; align-items:center; }
+.chsect { padding:14px 12px 7px; font-size:10px; font-weight:600; letter-spacing:.12em;
+          text-transform:uppercase; color:var(--fg-faint); display:flex; gap:8px;
+          align-items:center; }
 .chsect .count { font-family:var(--mono); letter-spacing:0; font-weight:400; }
-.chsect::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
-.chrow { display:flex; gap:10px; align-items:baseline; padding:4px 12px; cursor:pointer; }
-.chrow:hover { background:var(--elev); }
-.chrow[aria-selected="true"] { background:var(--elev-2); }
-.chrow .st { font-family:var(--mono); font-size:10px; color:var(--t3); flex:0 0 2ch;
+.chsect::after { content:""; flex:1 1 auto; height:1px; background:var(--border-soft); }
+.chrow { display:flex; gap:10px; align-items:baseline; padding:5px 12px; cursor:pointer; }
+.chrow:hover { background:var(--card); }
+.chrow[aria-selected="true"] { background:var(--raised); }
+.chrow .st { font-family:var(--mono); font-size:10px; color:var(--fg-faint); flex:0 0 2ch;
              text-align:center; }
 .chrow .f { flex:1 1 auto; font-family:var(--mono); font-size:11.5px; overflow-wrap:anywhere; }
-.chrow .n { font-family:var(--mono); font-size:10.5px; white-space:nowrap; color:var(--t3); }
+.chrow .n { font-family:var(--mono); font-size:10.5px; white-space:nowrap;
+            color:var(--fg-faint); }
 .chrow .n .a { color:var(--up); } .chrow .n .d { color:var(--danger); }
 /* A sha is a fixed-width label, and it gets its own room: it ran into the subject. */
 .chrow .sha { flex:0 0 9ch; font-family:var(--mono); font-size:10.5px; color:var(--accent);
-              opacity:.85; }
-.chrow .subject { flex:1 1 auto; font-size:12px; color:var(--t2); overflow-wrap:anywhere; }
+              opacity:.9; }
+.chrow .subject { flex:1 1 auto; font-size:12px; color:var(--fg-muted);
+                  overflow-wrap:anywhere; }
 .chrow .local { font-family:var(--mono); font-size:10px; color:var(--wants); flex:0 0 auto; }
 .diff { flex:1 1 auto; overflow:auto; }
-.diff .hd { position:sticky; top:0; z-index:1; background:var(--panel);
-            border-bottom:1px solid var(--line); padding:7px 10px; display:flex; gap:8px;
-            align-items:center; }
-.diff .hd .name { font-family:var(--mono); font-size:11px; color:var(--t2); overflow:hidden;
-                  text-overflow:ellipsis; white-space:nowrap; }
 .diff .l { white-space:pre; padding:0 10px; font-family:var(--mono); font-size:11.5px;
            line-height:1.5; }
-.diff .l.add { background:#0d2618; color:#a7f3c0; }
-.diff .l.del { background:#261013; color:#fcaaaa; }
-.diff .l.hunk { background:#131a2b; color:#93b4ff; }
-.diff .l.meta { color:var(--t3); }
+.diff .l.add { background:#0F2418; color:#A9EFC4; }
+.diff .l.del { background:#291417; color:#F8B4B4; }
+.diff .l.hunk { background:#161D31; color:#9DB8FF; }
+.diff .l.meta { color:var(--fg-faint); }
+.diff .dtotal { display:flex; gap:10px; padding:10px 10px 8px; font-family:var(--mono);
+                font-size:10px; letter-spacing:.12em; text-transform:uppercase;
+                color:var(--fg-faint); }
+.diff .dtotal .plus, .diff .dtotal .minus { letter-spacing:0; text-transform:none;
+                                            font-size:11px; }
+.diff .dfile, .diff .dmsg { border-bottom:1px solid var(--border-soft); }
 /* One block per file. The name stays put while you scroll that file's hunks, and
    stops being true the moment the next file's name reaches the top. */
-.diff .dtotal { display:flex; gap:10px; padding:9px 10px 8px; font-family:var(--mono);
-                font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--t3); }
-.diff .dtotal .plus, .diff .dtotal .minus { letter-spacing:0; text-transform:none; font-size:11px; }
-.diff .dfile, .diff .dmsg { border-bottom:1px solid var(--line-soft); }
 .diff .dhead { position:sticky; top:0; z-index:1; display:flex; gap:10px; align-items:baseline;
-               padding:8px 10px; background:var(--elev);
-               border-bottom:1px solid var(--line-soft); cursor:pointer;
-               font-family:var(--mono); font-size:11px; color:var(--t2); list-style:none; }
+               padding:8px 10px; background:var(--card);
+               border-bottom:1px solid var(--border-soft); cursor:pointer;
+               font-family:var(--mono); font-size:11px; color:var(--fg-muted);
+               list-style:none; }
 .diff .dhead::-webkit-details-marker { display:none; }
-.diff .dhead::before { content:"▾"; color:var(--t3); font-size:9px; flex:0 0 auto; }
-.diff .dfile:not([open]) .dhead::before, .diff .dmsg:not([open]) .dhead::before { content:"▸"; }
-.diff .dhead:hover { color:var(--t1); }
+.diff .dhead::before { content:"▾"; color:var(--fg-faint); font-size:9px; flex:0 0 auto; }
+.diff .dfile:not([open]) .dhead::before, .diff .dmsg:not([open]) .dhead::before {
+  content:"▸"; }
+.diff .dhead:hover { color:var(--fg); }
 .diff .dhead .n { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
                   white-space:nowrap; direction:rtl; text-align:left; }
-.diff .dhead .plus { color:#7ee2a8; flex:0 0 auto; }
-.diff .dhead .minus { color:#f79a9a; flex:0 0 auto; }
-.diff .dhead .bin { color:var(--t3); flex:0 0 auto; }
+.diff .dhead .plus { color:#7EE2A8; flex:0 0 auto; }
+.diff .dhead .minus { color:#F79A9A; flex:0 0 auto; }
+.diff .dhead .bin { color:var(--fg-faint); flex:0 0 auto; }
 
-.usage { display:flex; flex-wrap:wrap; gap:10px; padding:12px; border-bottom:1px solid var(--line-soft); }
-.usage .u { flex:1 1 120px; display:grid; gap:2px; padding:9px 11px; border:1px solid var(--line);
-            border-radius:8px; background:var(--elev); }
-.usage .k { font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--t3); }
-.usage .v { font-family:var(--mono); font-size:17px; color:var(--t1); }
-.usage .s { font-size:10.5px; color:var(--t3); }
-.snip { margin:0 12px 12px; padding:11px 12px; background:var(--ink); border:1px solid var(--line);
-        border-radius:8px; font-family:var(--mono); font-size:11px; line-height:1.55;
-        color:var(--t2); overflow-x:auto; white-space:pre; }
+.usage { display:flex; flex-wrap:wrap; gap:10px; padding:14px;
+         border-bottom:1px solid var(--border-soft); }
+.usage .u { flex:1 1 120px; display:grid; gap:3px; padding:11px 13px;
+            border:1px solid var(--border-soft); border-radius:var(--r-lg);
+            background:var(--card); }
+.usage .k { font-size:9.5px; letter-spacing:.14em; text-transform:uppercase;
+            color:var(--fg-faint); }
+.usage .v { font-family:var(--mono); font-size:17px; color:var(--fg); }
+.usage .s { font-size:10.5px; color:var(--fg-faint); }
+.snip { margin:0 14px 14px; padding:12px 13px; background:var(--bg);
+        border:1px solid var(--border-soft); border-radius:var(--r-lg);
+        font-family:var(--mono); font-size:11px; line-height:1.55;
+        color:var(--fg-muted); overflow-x:auto; white-space:pre; }
 
 /* ── sheets ──────────────────────────────────────────────────────────────── */
-.scrim { position:fixed; inset:0; background:#000c; display:none; z-index:9; }
+.scrim { position:fixed; inset:0; background:rgb(5 7 11 / .7); display:none; z-index:9;
+         backdrop-filter:blur(3px); -webkit-backdrop-filter:blur(3px); }
 .scrim.on { display:block; }
 .sheet { position:fixed; z-index:10; display:none; flex-direction:column; left:50%; top:50%;
-         transform:translate(-50%,-50%); width:min(680px,94vw); max-height:min(84vh,780px);
-         background:var(--panel); border:1px solid var(--line); border-radius:12px;
-         box-shadow:0 24px 60px #000a; overflow:hidden; }
+         transform:translate(-50%,-50%); width:min(640px,94vw); max-height:min(84vh,780px);
+         background:var(--surface); border:1px solid var(--border);
+         border-radius:14px; box-shadow:var(--shadow-lg); overflow:hidden; }
 .sheet.on { display:flex; }
-.shead, .sfoot { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:11px 13px; }
-.shead { border-bottom:1px solid var(--line); }
-.shead strong { font-size:13px; font-weight:600; }
-.sfoot { border-top:1px solid var(--line); }
+@media (prefers-reduced-motion: no-preference) {
+  .sheet.on { animation:sheetIn .18s cubic-bezier(.16,1,.3,1); }
+  .popover { animation:popIn .12s ease-out; }
+}
+@keyframes sheetIn { from { opacity:0; transform:translate(-50%,-48%) scale(.97); } }
+@keyframes popIn { from { opacity:0; transform:translateY(-3px); } }
+.shead, .sfoot { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:13px 16px; }
+.shead { border-bottom:1px solid var(--border-soft); }
+.shead strong { font-size:13.5px; font-weight:600; }
+.sfoot { border-top:1px solid var(--border-soft); justify-content:flex-end; }
 .sfoot:empty { display:none; }
-.sbody { flex:1 1 auto; overflow-y:auto; padding:13px; display:grid; gap:10px;
+.sfoot .meta { font-size:12px; color:var(--fg-faint); }
+.sbody { flex:1 1 auto; overflow-y:auto; padding:16px; display:grid; gap:12px;
          align-content:start; }
 .sheet textarea, .sheet input, .sheet select {
-  width:100%; background:var(--ink); color:var(--t1); border:1px solid var(--line);
-  border-radius:var(--r); padding:8px 9px; font:inherit; font-size:13px; }
+  width:100%; background:var(--bg); color:var(--fg); border:1px solid var(--input);
+  border-radius:var(--r); padding:8px 10px; font:inherit; font-size:13px; }
 .sheet textarea { min-height:92px; resize:vertical; font-family:var(--sans); }
-.sheet textarea:focus, .sheet input:focus, .sheet select:focus {
-  outline:none; border-color:var(--accent); }
-.sheet label { display:grid; gap:5px; font-size:11px; color:var(--t3);
-               letter-spacing:.02em; }
-.note { font-size:11.5px; color:var(--t3); line-height:1.6; }
-.row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.sheet textarea::placeholder, .sheet input::placeholder { color:var(--fg-faint); }
+.sheet label { display:grid; gap:6px; font-size:11.5px; font-weight:500;
+               color:var(--fg-muted); }
+/* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width box
+   floating above its own label. */
+.sbody label.check { display:flex; gap:9px; align-items:center; margin:2px 0;
+                     font-size:12.5px; font-weight:400; color:var(--fg-muted);
+                     cursor:pointer; }
+.sheet .check input { width:15px; height:15px; flex:0 0 auto; accent-color:var(--danger); }
+.note { font-size:11.5px; color:var(--fg-faint); line-height:1.6; }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .spacer { flex:1 1 auto; }
-.srv { border:1px solid var(--line); border-radius:var(--r); padding:9px 10px; display:grid;
-       gap:4px; }
-.srv .nm { display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
+.srv { border:1px solid var(--border-soft); border-radius:var(--r-lg); padding:11px 13px;
+       display:grid; gap:5px; background:var(--card); }
+.srv .nm { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px;
            font-weight:600; overflow-wrap:anywhere; }
-.srv .scope { font-family:var(--mono); font-size:10px; color:var(--t3); border:1px solid var(--line);
-              border-radius:4px; padding:0 4px; font-weight:400; }
-.srv .dt { font-size:11px; color:var(--t3); overflow-wrap:anywhere; font-family:var(--mono); }
+.srv .scope { font-family:var(--mono); font-size:9.5px; color:var(--fg-faint);
+              border:1px solid var(--border); border-radius:999px; padding:1px 6px;
+              font-weight:400; }
+.srv .dt { font-size:11px; color:var(--fg-faint); overflow-wrap:anywhere;
+           font-family:var(--mono); }
 .srv .dot { width:6px; height:6px; }
 .srv[data-state="ok"] .dot { background:var(--up); }
 .srv[data-state="fail"] .dot { background:var(--danger); }
 .srv[data-state="auth"] .dot { background:var(--wants); }
-.srv[data-state="pending"] .dot { background:var(--idle); }
+.srv[data-state="pending"] .dot { background:var(--fg-faint); }
+.srv .row { margin-top:3px; }
 .srv .auth { display:grid; gap:6px; justify-items:start; margin-top:2px;
-  padding-top:8px; border-top:1px dashed var(--line); }
+  padding-top:9px; border-top:1px dashed var(--border); }
 .srv .auth a { font-family:var(--mono); font-size:11px; color:var(--accent);
   overflow-wrap:anywhere; }
 .logline { display:flex; gap:9px; align-items:baseline; font-family:var(--mono);
-           font-size:11px; line-height:1.65; }
-.logline .t { color:var(--t3); flex:0 0 auto; }
-.logline .m { overflow-wrap:anywhere; color:var(--t2); }
+           font-size:11px; line-height:1.7; }
+.logline .t { color:var(--fg-faint); flex:0 0 auto; }
+.logline .m { overflow-wrap:anywhere; color:var(--fg-muted); }
 .logline.bad .m { color:var(--danger); }
 .logline.warn .m { color:var(--wants); }
 .sbody.log { gap:0; font-variant-numeric:tabular-nums; }
 
 /* ── phone / tablet: exactly one surface, one rule ───────────────────────── */
 nav { display:none; }
-@media (max-width:1280px) { main { grid-template-columns:minmax(0,272px) minmax(0,1fr); } }
+@media (max-width:1280px) { main { grid-template-columns:minmax(0,280px) minmax(0,1fr); } }
 @media (max-width:900px) {
   main { grid-template-columns:1fr; }
   /* One rule decides what is visible, so two of them can't disagree — which is how
@@ -344,12 +428,17 @@ nav { display:none; }
   main[data-surface="session"] .pane,
   main[data-surface="changes"] .changes { display:flex; }
   .keys { display:flex; }
-  nav { display:flex; flex:0 0 auto; border-top:1px solid var(--line); background:var(--panel);
-        padding-bottom:env(safe-area-inset-bottom); }
-  nav button { flex:1; background:none; border:0; color:var(--t3); padding:11px 0 10px;
-               font-size:11px; letter-spacing:.04em; }
-  nav button[aria-current="true"] { color:var(--t1); box-shadow:inset 0 -2px 0 var(--accent); }
-  .sheet { inset:0; width:100%; max-height:100%; border-radius:0; transform:none; left:0; top:0; }
+  nav { display:flex; flex:0 0 auto; border-top:1px solid var(--border-soft);
+        background:var(--surface); padding-bottom:env(safe-area-inset-bottom); }
+  nav button { position:relative; flex:1; background:none; border:0; color:var(--fg-faint);
+               padding:12px 0 11px; font-size:11px; font-weight:500;
+               letter-spacing:.04em; cursor:pointer; }
+  nav button[aria-current="true"] { color:var(--fg); }
+  nav button[aria-current="true"]::before { content:""; position:absolute; top:0; left:50%;
+        transform:translateX(-50%); width:36px; height:2px; border-radius:2px;
+        background:var(--accent); }
+  .sheet { inset:0; width:100%; max-height:100%; border-radius:0; transform:none;
+           left:0; top:0; animation:none; }
   .stats span:nth-child(n+3) { display:none; }
 }
 .b.narrow { display:none; }
@@ -359,47 +448,54 @@ nav { display:none; }
   .stats span:nth-child(n+2) { display:none; }
   .b .lbl { display:none; }
   .b.wide { display:none; }
-  .b.narrow { display:inline-block; }
+  .b.narrow { display:inline-flex; }
 }
 body.full header, body.full .side, body.full .changes, body.full nav { display:none; }
 body.full main { grid-template-columns:1fr; }
 body.full main .pane { display:flex; }
-/* Its own target, with its own edge — it opens a menu while the label beside it
-   switches surface, and nobody can guess that from 10px of chevron. */
-.caret { margin-left:7px; padding:2px 2px 2px 7px; font-size:10px; opacity:.6;
-         border-left:1px solid var(--line); border-radius:3px; }
-.caret:hover { opacity:1; color:var(--accent); background:var(--elev-2); }
-/* A count is data, not an alarm: the same weight as every other number in the row. */
-.b .badge { margin-left:6px; font-family:var(--mono); font-size:10.5px; color:var(--t3); }
-/* Named popover, not menu: ".b.menu" on the trigger button was picking up these
-   rules — position:fixed, display:grid, min-width:230px — and rendering the button
-   as a giant empty box. A modifier and a component must not share a class name. */
-.popover { position:fixed; z-index:30; min-width:230px; padding:5px; border-radius:9px;
-        background:var(--elev); border:1px solid var(--line); box-shadow:0 18px 44px #000b;
-        display:grid; gap:1px; }
-.mrow { display:flex; gap:12px; align-items:baseline; width:100%; padding:7px 9px;
-        background:transparent; border:0; border-radius:6px; cursor:pointer; text-align:left;
-        font-size:12.5px; color:var(--t1); }
-.mrow:hover:not([disabled]) { background:var(--elev-2); }
-.mrow[disabled] { color:var(--t3); cursor:default; }
+
+/* ── popover — named popover, not menu: ".b.menu" on the trigger button was picking
+   up these rules and rendering the button as a giant empty box. A modifier and a
+   component must not share a class name. ─────────────────────────────────── */
+.popover { position:fixed; z-index:30; min-width:240px; padding:5px; border-radius:var(--r-lg);
+        background:var(--popover); border:1px solid var(--border);
+        box-shadow:var(--shadow-md); display:grid; gap:1px; }
+.mrow { display:flex; gap:14px; align-items:baseline; width:100%; padding:7px 10px;
+        background:transparent; border:0; border-radius:var(--r); cursor:pointer;
+        text-align:left; font-size:12.5px; color:var(--fg); text-decoration:none; }
+.mrow:hover:not([disabled]) { background:var(--raised); }
+.mrow[disabled] { color:var(--fg-faint); cursor:default; }
 .mrow.on { color:var(--accent); }
-.mrow.danger:hover { color:var(--danger); }
+.mrow.danger:hover { color:var(--danger);
+                     background:color-mix(in oklab, var(--danger) 10%, transparent); }
 .mrow .ml { flex:1 1 auto; }
-.mrow .mh { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap; }
-.msep { height:1px; background:var(--line); margin:4px 2px; }
+.mrow .mh { font-family:var(--mono); font-size:10.5px; color:var(--fg-faint);
+            white-space:nowrap; }
+.msep { height:1px; background:var(--border-soft); margin:4px 6px; }
+
+/* ── signals: loading, stale, toast ──────────────────────────────────────── */
 /* A refresh that blanks the screen looks like a crash. This is the only signal. */
-#loading { position:fixed; top:0; left:0; height:2px; width:0; background:var(--accent);
+#loading { position:fixed; top:0; left:0; height:2px; width:0;
+           background:linear-gradient(90deg, var(--accent), #C7D2FE);
            opacity:0; transition:width .25s ease, opacity .2s; z-index:40; }
 #loading.on { opacity:1; }
 .stale { position:fixed; z-index:50; left:50%; transform:translateX(-50%); top:10px;
-         display:flex; gap:12px; align-items:center; padding:9px 12px; border-radius:var(--r);
-         background:var(--elev-2); border:1px solid #37436b; color:var(--t1);
-         font-size:12.5px; box-shadow:0 14px 34px #000b; }
+         display:flex; gap:12px; align-items:center; padding:10px 12px;
+         border-radius:var(--r-lg); background:var(--raised);
+         border:1px solid color-mix(in oklab, var(--accent) 40%, transparent);
+         color:var(--fg); font-size:12.5px; box-shadow:var(--shadow-md); }
+/* Errors and outcomes both land here, so it is neutral: an amber "Merged main in"
+   read as a warning about the thing that had just worked. */
 .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
-         display:none; max-width:min(90vw,52ch); padding:9px 13px; border-radius:var(--r);
-         background:var(--elev-2); border:1px solid #5c452b; color:var(--wants);
-         font-size:12.5px; box-shadow:0 12px 30px #000a; }
+         display:none; max-width:min(90vw,52ch); padding:10px 14px;
+         border-radius:var(--r-lg); background:var(--raised);
+         border:1px solid var(--border); color:var(--fg);
+         font-size:12.5px; box-shadow:var(--shadow-md); }
 .toast.on { display:block; }
+@media (prefers-reduced-motion: no-preference) {
+  .toast.on { animation:toastIn .16s ease-out; }
+}
+@keyframes toastIn { from { opacity:0; transform:translate(-50%, 4px); } }
 </style>
 
 <div id="loading"></div>
@@ -408,13 +504,16 @@ body.full main .pane { display:flex; }
       title="Which repositories this server is holding">…</button><span class="tool">workmux</span></div>
   <div class="stats" id="stats"></div>
   <div class="acts">
-    <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">▤ Stacks</button>
-  <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
-      ◇<span class="lbl"> MCP</span></button>
+    <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="m12 2 8.5 4.5-8.5 4.5-8.5-4.5Z"/><path d="m3.5 11.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4.5 8.5-4.5"/></svg></span><span class="lbl">Stacks</span></button>
+    <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 22v-3"/><path d="M9 7V2M15 7V2"/><path d="M18 7v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V7Z"/></svg></span><span class="lbl">MCP</span></button>
     <button class="b wide" onclick="openSheet('log')" title="What this workmux process has been doing">
-      ▤<span class="lbl"> Server log</span></button>
-    <button class="b icon narrow" onclick="openSheet('more')" title="More">⋯</button>
-    <button class="b icon" onclick="poll(true)" title="Refresh">↻</button>
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8M16 17H8"/></svg></span><span class="lbl">Server log</span></button>
+    <button class="b icon narrow" onclick="openSheet('more')" title="More">
+      <span class="ic"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="0.8"/><circle cx="12" cy="12" r="0.8"/><circle cx="19" cy="12" r="0.8"/></svg></span></button>
+    <button class="b icon" onclick="poll(true)" title="Refresh">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></span></button>
   </div>
 </header>
 
@@ -430,7 +529,7 @@ body.full main .pane { display:flex; }
   <div class="side">
     <div class="lhead">
       <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
-        ＋<span class="lbl"> New work</span></button>
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></span><span class="lbl">New work</span></button>
       <input id="filter" type="search" placeholder="Filter (/)" autocomplete="off"
              spellcheck="false" aria-label="Filter worktrees">
     </div>
@@ -464,6 +563,23 @@ const el = (t, c, ...kids) => {
   return n;
 };
 const $ = (id) => document.getElementById(id);
+
+// Inline stroke icons (lucide outlines), because text glyphs (▤ ◇ ↻ ⋯) render at
+// whatever size and weight the font fancies, which made every control look slightly
+// wrong in a different way. The stroke attributes live in CSS so these stay short.
+const ICONS = {
+  chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>',
+  more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="0.8"/><circle cx="12" cy="12" r="0.8"/><circle cx="19" cy="12" r="0.8"/></svg>',
+  external: '<svg viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="m6 4 14 8-14 8Z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+  maximize: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  back: '<svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>',
+};
+const ic = (name) => { const s = el("span", "ic"); s.innerHTML = ICONS[name]; return s; };
+const caret = () => { const s = el("span", "caret"); s.innerHTML = ICONS.chevron; return s; };
 
 let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null, FILTER = "";
 const PANES = new Map();   // session id → {term, fit, ws, dead}
@@ -586,7 +702,7 @@ async function poll(userAsked) {
   document.title = here + " · workmux";
   const label = $("proj");
   label.textContent = here;
-  if (multi()) label.append(el("span", "caret", "▾"));
+  if (multi()) label.append(caret());
 
   const rows = visible();
   const stats = $("stats");
@@ -743,7 +859,7 @@ function strip(w, tone) {
   // per-row menu rather than an X you can hit while reaching for the row. The main
   // checkout has no menu at all: it is where the repository lives.
   if (!w.is_default) {
-    const more = el("button", "rowmenu", "⋯");
+    const more = el("button", "rowmenu", ic("more"));
     more.title = "What to do with this work";
     more.setAttribute("aria-label", "More");
     more.onclick = (e) => {
@@ -904,7 +1020,7 @@ function tabs(active) {
   else if (!cur && mine.length) sess.append(el("span", "n", String(mine.length)));
   // Another one is waiting on you, and it's behind the caret.
   if (mine.some(s => s !== cur && sessionWaiting(s, w))) sess.append(el("i", "dot wants other"));
-  sess.append(el("span", "caret", "▾"));
+  sess.append(caret());
   // The whole tab opens the menu, caret or not: a 10px chevron is a small target for the
   // only way to reach what's behind it. Getting back to the terminal is the first thing
   // in the menu, so it is still one click away.
@@ -925,7 +1041,7 @@ function tabs(active) {
   const n = CH && CH.for === SEL ? (CH.files || []).length : 0;
   if (n) git.append(el("span", "n", String(n)));
   if (w && w.behind > 0) git.append(el("span", "n", "⇣" + w.behind));
-  git.append(el("span", "caret", "▾"));
+  git.append(caret());
   git.onclick = () => gitMenu(git, w);
   seg.append(git);
   return seg;
@@ -1069,7 +1185,8 @@ function renderBar() {
   const mine = SESSIONS.filter(s => s.cwd === SEL);
   const group = () => { const g = el("div", "group"); bar.append(g); return g; };
   const btn = (into, label, fn, opts) => {
-    const b = el("button", "b" + (opts && opts.cls ? " " + opts.cls : ""), label);
+    const b = el("button", "b" + (opts && opts.cls ? " " + opts.cls : ""),
+                 ...(Array.isArray(label) ? label : [label]));
     b.onclick = fn;
     if (opts && opts.title) b.title = opts.title;
     into.append(b);
@@ -1081,19 +1198,19 @@ function renderBar() {
   if (projOf(w).stack_enabled) {
     const g3 = group();
     if (w.stack) {
-      if (w.stack.url) btn(g3, "↗ open", () => window.open(w.stack.url, "_blank"),
+      if (w.stack.url) btn(g3, [ic("external"), "Open"], () => window.open(w.stack.url, "_blank"),
                            { title: w.stack.url });
       btn(g3, "Logs", () => start("logs"), { title: "Tail " + w.stack.slot + "'s containers" });
-      btn(g3, "↻ restart", () => stackAction("restart", w));
-      btn(g3, "■ stop", () => stackAction("stop", w), { cls: "danger" });
+      btn(g3, [ic("refresh"), "Restart"], () => stackAction("restart", w));
+      btn(g3, [ic("stop"), "Stop"], () => stackAction("stop", w), { cls: "danger" });
     } else {
-      btn(g3, "▶ start app", () => stackAction("up", w),
+      btn(g3, [ic("play"), "Start app"], () => stackAction("up", w),
           { title: "Containers for this work — it doesn't need them to exist" });
     }
   }
   if (ACTIVE) {
     const g5 = group();
-    btn(g5, "⤢", toggleFull, { cls: "icon", title: "Whole window" });
+    btn(g5, [ic("maximize")], toggleFull, { cls: "icon", title: "Whole window" });
     btn(g5, "A−", () => setFont(-1), { cls: "icon", title: "Smaller text" });
     btn(g5, "A+", () => setFont(1), { cls: "icon", title: "Bigger text" });
   }
@@ -1164,6 +1281,26 @@ function showEmpty(existing) {
     fact("path", w.path.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"));
     box.append(facts);
   }
+  // The sentence above used to be the only way to learn what to do next, and the
+  // doing was two clicks away behind the Session menu. The actions belong here —
+  // but only the ones this project's agent actually has (absent capability,
+  // absent affordance).
+  if (w) {
+    const can = caps(w);
+    const acts = el("div", "row");
+    const act = (cls, label, fn) => {
+      const b = el("button", "b " + cls, label);
+      b.onclick = fn;
+      acts.append(b);
+    };
+    if (w.agents && w.agents.length && can.attach) {
+      act("primary", "Resume " + (w.agents[0].name || can.name || "the agent"), () => start("resume"));
+    } else if ((!w.agents || !w.agents.length) && can.run) {
+      act("primary", "Start " + (can.name || "an agent"), () => start("agent"));
+    }
+    act("", "Open a shell", () => start("shell"));
+    box.append(acts);
+  }
   t.append(box);
 }
 
@@ -1226,8 +1363,10 @@ async function open(id) {
       cursorBlink: true, scrollback: 8000,
       // ⌥ must reach the program as a meta prefix, or word-wise editing does nothing.
       macOptionIsMeta: true, allowProposedApi: true,
-      theme: { background: "#0e0e13", foreground: "#e7e7ee", cursor: "#e7e7ee",
-               selectionBackground: "#2b3a55" },
+      // The terminal's background matches --bg, so the pane and the page read as
+      // one surface instead of a canvas floating in a differently-dark box.
+      theme: { background: "#0B0D11", foreground: "#e7e7ee", cursor: "#e7e7ee",
+               selectionBackground: "#2C3B58" },
     });
     const fit = new GhosttyWeb.FitAddon();
     term.loadAddon(fit);
@@ -1706,7 +1845,7 @@ function renderChanges() {
   const w = selected();
   if (!w) return;
   bar.append(tabs("changes"));
-  const refresh = el("button", "b icon", "↻");
+  const refresh = el("button", "b icon", ic("refresh"));
   refresh.title = "Re-read this worktree";
   refresh.onclick = () => loadChanges(true);
   bar.append(refresh);
@@ -1821,7 +1960,7 @@ function paintDiff(title, diff, error) {
   const bar = $("chbar"), body = $("chbody");
   bar.textContent = ""; body.textContent = "";
   bar.append(tabs("changes"));
-  const back = el("button", "b", "‹ files");
+  const back = el("button", "b", ic("back"), "Files");
   back.onclick = () => { CHFILE = null; CHREV = null; renderChanges(); };
   bar.append(back);
   bar.append(el("span", "who", title));
@@ -1901,7 +2040,7 @@ function projectMenu(anchor) {
     }
     items.push({ sep: true });
   }
-  items.push({ label: "＋ Add a repository…", hint: "or run workmux in it", go: addProject });
+  items.push({ label: "Add a repository…", hint: "or run workmux in it", go: addProject });
   const here = curProject();
   if (multi() && here.id) {
     items.push({ label: "Stop serving " + here.name, danger: true,
@@ -2160,12 +2299,12 @@ async function renderMcp(refresh) {
     if (x.suggest) card.append(el("div", "dt", "found at " + x.suggest + " — not on the PATH it runs with"));
     const row = el("div", "row");
     if (x.state === "auth") {
-      const b = el("button", "b", "authenticate");
+      const b = el("button", "b", "Authenticate");
       b.title = "Ask the agent CLI where to authorize this server";
       b.onclick = () => authenticate(where.id, x.name, card, b);
       row.append(b);
     }
-    const rm = el("button", "b", "remove");
+    const rm = el("button", "b", "Remove");
     rm.onclick = async () => {
       if (!confirm("Remove MCP server " + x.name + (x.scope ? " (" + x.scope + ")" : "") + "?")) return;
       const scope = (x.scope || "").startsWith("local") ? "local" : x.scope;
@@ -2179,9 +2318,9 @@ async function renderMcp(refresh) {
     body.append(card);
   }
 
-  const addBtn = el("button", "b", "＋ add a server");
+  const addBtn = el("button", "b", ic("plus"), "Add a server");
   addBtn.onclick = () => renderMcpAdd();
-  const refreshBtn = el("button", "b", "↻ re-check");
+  const refreshBtn = el("button", "b", ic("refresh"), "Re-check");
   refreshBtn.onclick = () => renderMcp(true);
   foot.append(addBtn, refreshBtn);
 }
@@ -2228,7 +2367,7 @@ async function authenticate(project, name, card, btn) {
     box.append(el("div", "dt",
       "the redirect page will fail if your browser isn't on this machine — that's fine, " +
       "copy the URL it lands on and paste it into the session below"));
-    const t = el("button", "b", "finish in a terminal");
+    const t = el("button", "b", "Finish in a terminal");
     t.onclick = async () => { closeSheet(); await start("mcpauth", name); };
     box.append(t);
   } else {
@@ -2281,7 +2420,7 @@ function renderMcpAdd() {
     if (r.error) { status.textContent = r.error; return; }
     renderMcp(true);
   };
-  const back = el("button", "b", "‹ back");
+  const back = el("button", "b", ic("back"), "Back");
   back.onclick = () => renderMcp(false);
   foot.append(save, back, status);
 }
@@ -2307,7 +2446,8 @@ async function renderLog() {
   }
   const only = el("button", "b" + (LOG_BAD_ONLY ? " on" : ""), "Problems only");
   only.onclick = () => { LOG_BAD_ONLY = !LOG_BAD_ONLY; renderLog(); };
-  const again = el("button", "b icon", "↻");
+  const again = el("button", "b icon", ic("refresh"));
+  again.title = "Re-read the log";
   again.onclick = renderLog;
   foot.append(only, again);
   body.scrollTop = body.scrollHeight;
@@ -2406,7 +2546,7 @@ async function renderStacks(quiet) {
 
     const row = el("div", "row");
     if (s.url) {
-      const a = el("a", "b", "open");
+      const a = el("a", "b", ic("external"), "Open");
       a.href = s.url; a.target = "_blank"; a.rel = "noopener";
       row.append(a);
     }
@@ -2417,10 +2557,10 @@ async function renderStacks(quiet) {
       row.append(b);
     };
     const on = w || { stack: s, project: where.id, path: s.path };
-    act("restart", async () => { await stackAction("restart", on); renderStacks(true); });
-    act("stop", async () => { await stackAction("stop", on); renderStacks(true); },
+    act("Restart", async () => { await stackAction("restart", on); renderStacks(true); });
+    act("Stop", async () => { await stackAction("stop", on); renderStacks(true); },
         "Frees the slot and the memory it is holding");
-    if (w) act("go to work", () => {
+    if (w) act("Go to work", () => {
       closeSheet();
       if (ONLY && ONLY !== w.project) setOnly(w.project);
       SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
@@ -2429,7 +2569,7 @@ async function renderStacks(quiet) {
     body.append(card);
   }
 
-  const again = el("button", "b", "↻ refresh");
+  const again = el("button", "b", ic("refresh"), "Refresh");
   again.onclick = () => renderStacks(false);
   foot.append(again);
 }
@@ -2562,3 +2702,4 @@ poll(true);
 setInterval(() => { if (!document.hidden) poll(false); }, 6000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(false); });
 </script>
+
