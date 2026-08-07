@@ -1,0 +1,537 @@
+/* workmux — a patch bay for parallel work.
+ *
+ * The design idea: each piece of work is a channel strip. A status rail down its
+ * left edge carries the one thing you need at a glance, the machine strings
+ * (branches, shas, slots, counts) are set in mono because they *are* the content,
+ * and colour is spent only on state — never on decoration. Strips are grouped into
+ * bands, so the ordering the server computes is visible instead of implied.
+ *
+ * ── how this file works ──────────────────────────────────────────────────────
+ *
+ * Tailwind v4, CSS-first. This is the source; the page loads the built file, so a
+ * change here means `make css`. Three theme decisions make the utilities read like
+ * this design rather than like a default:
+ *
+ *   --spacing: 1px   so p-7 is 7px. This interface was tuned in odd numbers — 7px
+ *                    12px 8px 0 — and rounding it onto a 4px grid would be a
+ *                    redesign nobody asked for.
+ *   --text-*         a small ladder, 10px to 17px: every size here is below
+ *                    Tailwind's defaults, so text-sm means 11.5px in this app.
+ *   --color-*        the palette, named for what it is for. Nothing below this
+ *                    @theme block contains a hex.
+ *
+ * Components are @apply'd utilities, so a rule here and a class in the markup say
+ * the same thing in the same vocabulary, and moving one into the other is a
+ * copy-paste. What is written as plain CSS is what a class cannot hold: generated
+ * content, sticky ancestors, ::-webkit pseudo-elements, and the state a parent
+ * hands to a child.
+ */
+@import "tailwindcss";
+@source "../dist/index.html";
+
+@theme {
+  /* Surfaces, lines, ink. */
+  --color-ink: #0a0c0f;
+  --color-panel: #11151a;
+  --color-elev: #161b22;
+  --color-elev-2: #1b212a;
+  --color-line: #212932;
+  --color-line-soft: #181e26;
+  --color-edge: #31404f;        /* a border that has been hovered */
+  --color-sel: #2b3444;         /* the ring on a selected strip */
+  --color-rail-base: #2a313b;
+  --color-select: #2b3a55;      /* ::selection, and the terminal's own */
+
+  /* Type: three weights of quiet. */
+  --color-t1: #e4e9f0;
+  --color-t2: #a9b4c4;
+  --color-t3: #77839a;
+
+  /* State. The only place colour is spent. */
+  --color-wants: #f0b429;
+  --color-live: #2ed3c6;
+  --color-idle: #5c6675;
+  --color-up: #4ade80;
+  --color-danger: #f27272;
+  --color-accent: #8aa0ff;
+
+  /* State, dressed: the fills and edges those get in buttons, diffs and notices. */
+  --color-primary-edge: #37436b;
+  --color-primary-ink: #c9d4ff;
+  --color-primary-fill: #1a1f33;
+  --color-on-ink: #cfe0ff;
+  --color-danger-edge: #5c2b2b;
+  --color-danger-edge-hi: #8a3a3a;
+  --color-danger-fill: #1e1315;
+  --color-danger-fill-hi: #2a1618;
+  --color-danger-ink: #ff9d9d;
+  --color-danger-ink-hi: #ffc2c2;
+  --color-warn-edge: #5c452b;
+  --color-add-fill: #0d2618;
+  --color-add-ink: #a7f3c0;
+  --color-add-num: #7ee2a8;
+  --color-del-fill: #261013;
+  --color-del-ink: #fcaaaa;
+  --color-del-num: #f79a9a;
+  --color-hunk-fill: #131a2b;
+  --color-hunk-ink: #93b4ff;
+  --color-white: #fff;
+
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  /* 1px, so the numbers in the markup are the numbers in the design. */
+  --spacing: 1px;
+
+  /* Every size carries line-height 1.5, which is what the body font shorthand used
+     to hand down. Tailwind pairs its own line-height with each text-* utility, so
+     leaving these out silently reset the rhythm of the whole page — rows came out
+     1-2px shorter and a menu lost 34px. */
+  --text-3xs: 10px;
+  --text-3xs--line-height: 1.5;
+  --text-2xs: 10.5px;
+  --text-2xs--line-height: 1.5;
+  --text-xs: 11px;
+  --text-xs--line-height: 1.5;
+  --text-sm: 11.5px;
+  --text-sm--line-height: 1.5;
+  --text-base: 12px;
+  --text-base--line-height: 1.5;
+  --text-md: 12.5px;
+  --text-md--line-height: 1.5;
+  --text-lg: 13px;
+  --text-lg--line-height: 1.5;
+  --text-2xl: 17px;
+  --text-2xl--line-height: 1.5;
+
+  /* Named -ctl, not -b: `rounded-b` is Tailwind's own bottom-side utility, and a
+     token by that name collided with it — every control came out 7px across the top
+     and 4px underneath. A theme key has to be checked against the built-ins. */
+  --radius-ctl: 7px;            /* the one radius: buttons, inputs, chips */
+
+  --animate-breathe: breathe 2.6s ease-in-out infinite;
+
+  --shadow-sheet: 0 24px 60px #000a;
+  --shadow-pop: 0 18px 44px #000b;
+  --shadow-notice: 0 14px 34px #000b;
+  --shadow-toast: 0 12px 30px #000a;
+  --shadow-rail: 0 0 10px 0 currentColor;
+  --inset-shadow-sel: inset 0 0 0 1px var(--color-sel);
+}
+
+/* The one moving thing in the interface: work in progress breathes. */
+@keyframes breathe {
+  0%, 100% { opacity: 1 }
+  50% { opacity: .45 }
+}
+
+@layer base {
+  :root { color-scheme: dark }
+
+  /* min-width:0 on everything, not only on the flex children that need it today.
+     Every truncating row in here — branch names, diff paths, agent transcripts — is
+     a flex or grid child that would otherwise refuse to shrink below its content
+     and push its own row past the width of the window. */
+  * { min-width: 0 }
+
+  html, body { height: 100% }
+  body {
+    @apply flex flex-col overflow-hidden bg-ink text-t1;
+    font: var(--text-lg) / 1.5 var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { @apply bg-select }
+
+  /* Preflight unstyles buttons; these are true of every button on the page. */
+  button { font: inherit; @apply cursor-pointer text-inherit }
+  button:disabled { @apply cursor-default }
+}
+
+@layer components {
+  /* ── header ──────────────────────────────────────────────────────────────── */
+  header { @apply flex h-46 flex-none items-center gap-14 border-b border-line bg-panel px-12 }
+  .brand { @apply flex flex-none items-baseline gap-5 whitespace-nowrap font-mono text-lg tracking-[-.01em] }
+  /* tracking-normal because preflight has form controls inherit letter-spacing, which
+     the browser's own stylesheet used to stop at a button. Without it the brand's
+     -0.01em reaches the project name and the header shifts 2px. */
+  .brand .proj {
+    @apply -ml-5 flex items-baseline gap-5 rounded-[5px] border-0 bg-none px-5 py-2
+           font-semibold tracking-normal text-t1 hover:bg-elev-2;
+    font: inherit;
+    font-weight: 600;
+  }
+  .brand .proj .caret { @apply ml-0 border-l-0 pl-0 }
+  .brand .tool { @apply text-xs text-t3 }
+  .stats { @apply flex flex-auto items-center gap-0 overflow-hidden font-mono text-xs text-t3 }
+  .stats span { @apply whitespace-nowrap border-l border-line-soft px-9 first:border-l-0 first:pl-0 }
+  .acts { @apply flex flex-none gap-6 }
+
+  /* Which repo a row belongs to. Only drawn when there is more than one, so a
+     single-project server looks exactly as it did. */
+  .strip .pj {
+    @apply whitespace-nowrap rounded-[4px] border border-line px-5 py-1 font-mono text-3xs text-t3;
+  }
+
+  /* ── buttons: one shape, three weights ─────────────────────────────────────
+     Every button on the page is .b. The weights are what it is for: primary starts
+     something, danger ends something, on is a state you are in. */
+  .b {
+    @apply flex-none cursor-pointer whitespace-nowrap rounded-ctl border border-line
+           bg-transparent px-9 py-4 text-base text-t2
+           transition-[border-color,color,background] duration-[120ms]
+           hover:border-edge hover:bg-elev hover:text-t1
+           focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent;
+  }
+  .b.primary { @apply border-primary-edge bg-primary-fill text-primary-ink hover:border-accent }
+  .b.danger:hover { @apply border-danger-edge bg-danger-fill text-danger }
+  .b.on { @apply border-accent text-on-ink }
+  .b.dead { @apply text-t3 line-through }
+  .b.icon { @apply font-mono }
+  .b[disabled] { @apply cursor-default opacity-50 }
+  /* A button that destroys something says so before you hover it, unlike the ones
+     that merely stop a container. */
+  .b.destroy {
+    @apply border-danger-edge bg-danger-fill text-danger-ink
+           hover:border-danger-edge-hi hover:bg-danger-fill-hi hover:text-danger-ink-hi;
+  }
+  /* A count is data, not an alarm: the same weight as every other number in the row. */
+  .b .badge { @apply ml-6 font-mono text-2xs text-t3 }
+  .group { @apply mr-2 flex flex-none gap-6 border-r border-line-soft pr-8 last:border-r-0 last:pr-0 }
+
+  /* ── layout ──────────────────────────────────────────────────────────────── */
+  main { @apply grid min-h-0 flex-auto grid-cols-[minmax(0,304px)_minmax(0,1fr)] }
+  .side, .pane, .changes { @apply flex min-h-0 min-w-0 flex-col }
+  .side { @apply border-r border-line bg-panel }
+  .changes { @apply bg-panel }
+  .list { @apply min-h-0 flex-auto overflow-y-auto }
+  /* New work and the filter live over the list they act on, not in the far corner of
+     the window. The filter is the answer to a long list: the names are the agent's,
+     they change, and scrolling forty of them to find one is not finding it. */
+  .lhead { @apply flex flex-none items-center gap-8 border-b border-line px-10 py-9 }
+  .lhead .b.primary { @apply flex-none }
+  .lhead input {
+    @apply h-30 min-w-0 flex-auto rounded-ctl border border-line bg-ink px-9 text-base text-t1
+           placeholder:text-t3 focus:border-accent focus:outline-none;
+    font: inherit;
+    font-size: var(--text-base);
+  }
+
+  /* The session and the diff share one column, switched by the tabs in the toolbar.
+     One rule decides what is visible, so two of them can't disagree — which is how
+     the work list and the diff ended up stacked on top of each other. Class
+     selectors, not `main > *`: a class beats an element whatever the order, so a
+     base `display:flex` was quietly winning against it. */
+  main .changes { display: none }
+  main[data-surface="changes"] .changes { display: flex }
+  main[data-surface="changes"] .pane { display: none }
+
+  /* ── bands: the ordering, made visible ───────────────────────────────────── */
+  .band { @apply border-b border-line-soft pb-6 last:border-b-0 }
+  .band > h2 {
+    @apply m-0 flex items-center gap-8 px-12 pt-12 pb-6 text-3xs font-semibold
+           uppercase tracking-[.15em] text-t3;
+    font-family: inherit;
+  }
+  .band > h2 .count { @apply font-mono font-normal tracking-normal opacity-70 }
+  /* The rule after a heading is generated content, so the heading stays one element
+     however long its text is. */
+  .band > h2::after { content: ""; @apply h-1 flex-auto bg-line-soft }
+  .band[data-tone="wants"] > h2 { @apply text-wants }
+
+  /* ── the channel strip ─────────────────────────────────────────────────────
+     The rail's colour is the row's state, which lives on the row, so the rail is
+     styled by its parent — and selected, hovered and live all interact on it. */
+  .strip { @apply relative flex cursor-pointer gap-10 pt-7 pr-12 pb-8 hover:bg-elev }
+  .strip[aria-selected="true"] { @apply bg-elev-2; box-shadow: var(--inset-shadow-sel) }
+  .strip .rail { @apply mr-1 rounded-r-[2px] bg-idle; flex: 0 0 3px }
+  .strip[data-tone="wants"] .rail { @apply bg-wants }
+  .strip[data-tone="live"] .rail { @apply bg-live }
+  .strip[data-tone="up"] .rail { @apply bg-up }
+  .strip[data-tone="base"] .rail { @apply bg-rail-base }
+  .strip[aria-selected="true"] .rail { @apply w-3; box-shadow: var(--shadow-rail) }
+  @media (prefers-reduced-motion: no-preference) {
+    .strip[data-tone="live"] .rail { @apply animate-breathe }
+  }
+  .strip .body { @apply grid min-w-0 flex-auto gap-3 }
+  .strip .head { @apply flex min-w-0 items-baseline gap-8 }
+  .strip .seen { @apply ml-auto flex-none whitespace-nowrap font-mono text-3xs text-t3 }
+  .strip .seen.last { @apply text-wants }
+  .strip .branch { @apply min-w-0 font-mono text-md font-semibold text-t1 [overflow-wrap:anywhere] }
+  .strip[aria-selected="true"] .branch { @apply text-white }
+  .strip[data-tone="base"] .branch { @apply font-normal text-t2 }
+  .strip .said { @apply overflow-hidden text-ellipsis whitespace-nowrap text-sm text-t2 }
+  .strip .chips { @apply flex flex-wrap items-center gap-x-6 gap-y-4 font-mono text-2xs text-t3 }
+  /* The row's menu appears on hover, and reaching for it must not run into the
+     timestamp underneath. */
+  .strip .rowmenu {
+    @apply absolute top-6 right-4 h-22 w-24 rounded-[6px] border-0 bg-none p-0 text-lg
+           leading-none text-t3 opacity-0 hover:bg-elev-2 hover:text-t1;
+  }
+  .strip:hover .rowmenu,
+  .strip .rowmenu:focus-visible,
+  .strip[aria-selected="true"] .rowmenu { @apply opacity-100 }
+  .strip:hover .seen,
+  .strip[aria-selected="true"] .seen { @apply pr-22 }
+
+  .chip { @apply inline-flex items-center gap-4 }
+  .chip.state { @apply text-wants }
+  .chip.app { @apply text-up }
+  .chip.pr { @apply text-t3 }
+  .dot { @apply size-5 flex-none rounded-[50%] bg-current }
+
+  /* ── session pane ────────────────────────────────────────────────────────── */
+  .bar {
+    @apply flex flex-none items-center gap-6 overflow-x-auto border-b border-line
+           bg-panel px-10 py-7;
+    scrollbar-width: none;
+  }
+  .bar::-webkit-scrollbar { display: none }
+  .bar .who { @apply overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-t3 }
+  .seg { @apply flex flex-none overflow-hidden rounded-ctl border border-line }
+  .seg button { @apply whitespace-nowrap border-0 bg-transparent px-11 py-4 text-base text-t3 }
+  .seg button + button { @apply border-l border-line }
+  .seg button[aria-current="true"] { @apply bg-elev-2 text-t1 }
+  .seg .n { @apply ml-5 font-mono text-2xs opacity-70 }
+  .seg button .lbl {
+    @apply inline-block max-w-[22ch] overflow-hidden text-ellipsis whitespace-nowrap align-bottom;
+  }
+  /* inline-block, or the width is ignored: the tab is not a flex container, and an
+     inline <i> with a width is a dot nobody can see. */
+  .seg button .dot.wants { @apply mt-0 mr-5 mb-1 ml-0 inline-block size-6 flex-none bg-wants align-middle }
+  /* One waiting behind the menu rather than in front of you: same colour, hollow,
+     and it sits after the count instead of being crushed against it. */
+  .seg button .dot.other { @apply mt-0 mr-0 mb-1 ml-7 bg-none; box-shadow: inset 0 0 0 2px var(--color-wants) }
+  @media (width <= 900px) { .seg { display: none } }   /* the bottom nav does this */
+
+  .tabs { @apply flex flex-none items-stretch gap-2 }
+  .tab {
+    @apply inline-flex max-w-[26ch] cursor-pointer items-center gap-7 whitespace-nowrap
+           border-0 border-b-2 border-b-transparent bg-transparent px-10 pt-5 pb-4
+           text-base text-t3 hover:text-t1;
+  }
+  .tab[aria-current="true"] { @apply border-b-accent text-t1 }
+  .tab .nm { @apply overflow-hidden text-ellipsis }
+  .tab .x { @apply rounded-[3px] px-1 text-xs text-t3 hover:bg-danger-fill hover:text-danger }
+  .tab.dead .nm { @apply line-through opacity-60 }
+
+  .term { @apply relative min-h-0 flex-auto overflow-hidden bg-ink }
+  /* One wrapper per session, created once and kept. A terminal cannot be re-opened
+     by calling showPane() twice, and clearing the container to re-open it is how a
+     pane came back blank after you switched tabs and returned. */
+  .wrap { @apply absolute inset-0 hidden pt-8 pr-4 pb-4 pl-10 }
+  .wrap.on { @apply block }
+  .wrap canvas { @apply block }
+
+  .hollow { @apply grid max-w-[52ch] gap-10 px-16 py-20 }
+  .hollow h3 { @apply m-0 font-mono text-lg font-semibold text-t1 }
+  .hollow p { @apply m-0 text-md text-t3 }
+  .facts { @apply mt-8 grid grid-cols-[auto_1fr] items-baseline gap-x-14 gap-y-5 font-mono text-sm }
+  .facts dt { @apply text-right text-t3 }
+  .facts dd { @apply m-0 text-t2 [overflow-wrap:anywhere] }
+
+  /* Opaque and above the terminal: it was transparent, so the last rows of output
+     were visible through the keys and looked like overlap. */
+  .keys {
+    @apply relative z-[2] hidden flex-none gap-5 overflow-x-auto border-t border-line
+           bg-panel px-10 py-7;
+    scrollbar-width: none;
+  }
+  .keys::-webkit-scrollbar { display: none }
+  .keys .b { @apply min-w-[3.2em] px-8 py-6 text-center font-mono }
+
+  /* ── changes ─────────────────────────────────────────────────────────────── */
+  .chbody { @apply flex-auto overflow-y-auto pb-12 }
+  .chsect {
+    @apply flex items-center gap-8 px-12 pt-12 pb-5 text-3xs font-semibold uppercase
+           tracking-[.15em] text-t3;
+  }
+  .chsect .count { @apply font-mono font-normal tracking-normal }
+  .chsect::after { content: ""; @apply h-1 flex-auto bg-line-soft }
+  .chrow { @apply flex cursor-pointer items-baseline gap-10 px-12 py-4 hover:bg-elev }
+  .chrow[aria-selected="true"] { @apply bg-elev-2 }
+  .chrow .st { @apply text-center font-mono text-3xs text-t3; flex: 0 0 2ch }
+  .chrow .f { @apply flex-auto font-mono text-sm [overflow-wrap:anywhere] }
+  .chrow .n { @apply whitespace-nowrap font-mono text-2xs text-t3 }
+  .chrow .n .a { @apply text-up }
+  .chrow .n .d { @apply text-danger }
+  /* A sha is a fixed-width label, and it gets its own room: it ran into the subject. */
+  .chrow .sha { @apply font-mono text-2xs text-accent opacity-85; flex: 0 0 9ch }
+  .chrow .subject { @apply flex-auto text-base text-t2 [overflow-wrap:anywhere] }
+  .chrow .local { @apply flex-none font-mono text-3xs text-wants }
+
+  .diff { @apply flex-auto overflow-auto }
+  .diff .hd {
+    @apply sticky top-0 z-[1] flex items-center gap-8 border-b border-line bg-panel px-10 py-7;
+  }
+  .diff .hd .name { @apply overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-t2 }
+  .diff .l { @apply px-10 font-mono text-sm leading-[1.5] whitespace-pre }
+  .diff .l.add { @apply bg-add-fill text-add-ink }
+  .diff .l.del { @apply bg-del-fill text-del-ink }
+  .diff .l.hunk { @apply bg-hunk-fill text-hunk-ink }
+  .diff .l.meta { @apply text-t3 }
+  .diff .dtotal {
+    @apply flex gap-10 px-10 pt-9 pb-8 font-mono text-3xs uppercase tracking-[.14em] text-t3;
+  }
+  .diff .dtotal .plus, .diff .dtotal .minus { @apply text-xs normal-case tracking-normal }
+  /* One block per file. The name stays put while you scroll that file's hunks, and
+     stops being true the moment the next file's name reaches the top. */
+  .diff .dfile, .diff .dmsg { @apply border-b border-line-soft }
+  .diff .dhead {
+    @apply sticky top-0 z-[1] flex cursor-pointer items-baseline gap-10 border-b
+           border-line-soft bg-elev px-10 py-8 font-mono text-xs text-t2 hover:text-t1;
+    list-style: none;
+  }
+  .diff .dhead::-webkit-details-marker { display: none }
+  .diff .dhead::before { content: "▾"; @apply flex-none text-[9px] text-t3 }
+  .diff .dfile:not([open]) .dhead::before,
+  .diff .dmsg:not([open]) .dhead::before { content: "▸" }
+  /* A path is identified by its end, so it truncates from the left. */
+  .diff .dhead .n {
+    @apply flex-auto overflow-hidden text-ellipsis whitespace-nowrap text-left [direction:rtl];
+  }
+  .diff .dhead .plus { @apply flex-none text-add-num }
+  .diff .dhead .minus { @apply flex-none text-del-num }
+  .diff .dhead .bin { @apply flex-none text-t3 }
+
+  .usage { @apply flex flex-wrap gap-10 border-b border-line-soft p-12 }
+  .usage .u { @apply grid gap-2 rounded-[8px] border border-line bg-elev px-11 py-9; flex: 1 1 120px }
+  .usage .k { @apply text-[9.5px] uppercase tracking-[.16em] text-t3 }
+  .usage .v { @apply font-mono text-2xl text-t1 }
+  .usage .s { @apply text-2xs text-t3 }
+  .snip {
+    @apply mx-12 mb-12 overflow-x-auto rounded-[8px] border border-line bg-ink px-12 py-11
+           font-mono text-xs leading-[1.55] text-t2 whitespace-pre;
+  }
+
+  /* ── sheets ──────────────────────────────────────────────────────────────── */
+  .scrim { @apply fixed inset-0 z-[9] hidden bg-[#000c] }
+  .scrim.on { @apply block }
+  .sheet {
+    @apply fixed top-1/2 left-1/2 z-10 hidden max-h-[min(84vh,780px)]
+           w-[min(680px,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col
+           overflow-hidden rounded-[12px] border border-line bg-panel shadow-sheet;
+  }
+  .sheet.on { @apply flex }
+  .shead, .sfoot { @apply flex flex-none items-center gap-8 px-13 py-11 }
+  .shead { @apply border-b border-line }
+  .shead strong { @apply text-lg font-semibold }
+  .sfoot { @apply border-t border-line empty:hidden }
+  .sbody { @apply grid flex-auto content-start gap-10 overflow-y-auto p-13 }
+  .sheet textarea, .sheet input, .sheet select {
+    @apply w-full rounded-ctl border border-line bg-ink px-9 py-8 text-lg tracking-normal
+           text-t1 focus:border-accent focus:outline-none;
+    font-family: inherit;
+  }
+  .sheet textarea { @apply min-h-92 resize-y font-sans }
+  .sheet label { @apply grid gap-5 text-xs tracking-[.02em] text-t3 }
+  /* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width
+     box floating above its own label. */
+  .sbody label.check { @apply my-2 flex cursor-pointer items-center gap-9 text-base text-t2 }
+  .sheet .check input { @apply size-15 flex-none accent-danger }
+  .note { @apply text-sm leading-[1.6] text-t3 }
+  .row { @apply flex flex-wrap items-center gap-6 }
+  .spacer { @apply flex-auto }
+
+  .srv { @apply grid gap-4 rounded-ctl border border-line px-10 py-9 }
+  .srv .nm { @apply flex items-center gap-7 font-mono text-base font-semibold [overflow-wrap:anywhere] }
+  .srv .scope {
+    @apply rounded-[4px] border border-line px-4 font-mono text-3xs font-normal text-t3;
+  }
+  .srv .dt { @apply font-mono text-xs text-t3 [overflow-wrap:anywhere] }
+  .srv .dot { @apply size-6 }
+  .srv[data-state="ok"] .dot { @apply bg-up }
+  .srv[data-state="fail"] .dot { @apply bg-danger }
+  .srv[data-state="auth"] .dot { @apply bg-wants }
+  .srv[data-state="pending"] .dot { @apply bg-idle }
+  .srv .auth { @apply mt-2 grid justify-items-start gap-6 border-t border-dashed border-line pt-8 }
+  .srv .auth a { @apply font-mono text-xs text-accent [overflow-wrap:anywhere] }
+
+  .logline { @apply flex items-baseline gap-9 font-mono text-xs leading-[1.65] }
+  .logline .t { @apply flex-none text-t3 }
+  .logline .m { @apply text-t2 [overflow-wrap:anywhere] }
+  .logline.bad .m { @apply text-danger }
+  .logline.warn .m { @apply text-wants }
+  .sbody.log { @apply gap-0 tabular-nums }
+
+  /* ── menus ───────────────────────────────────────────────────────────────── */
+  /* Its own target, with its own edge — it opens a menu while the label beside it
+     switches surface, and nobody can guess that from 10px of chevron. */
+  .caret {
+    @apply ml-7 rounded-[3px] border-l border-line py-2 pr-2 pl-7 text-3xs opacity-60
+           hover:bg-elev-2 hover:text-accent hover:opacity-100;
+  }
+  /* Named popover, not menu: ".b.menu" on the trigger button was picking up these
+     rules — position:fixed, display:grid, min-width:230px — and rendering the button
+     as a giant empty box. A modifier and a component must not share a class name. */
+  .popover {
+    @apply fixed z-30 grid min-w-[230px] gap-1 rounded-[9px] border border-line
+           bg-elev p-5 shadow-pop;
+  }
+  .mrow {
+    @apply flex w-full cursor-pointer items-baseline gap-12 rounded-[6px] border-0
+           bg-transparent px-9 py-7 text-left text-md text-t1;
+  }
+  .mrow:hover:not([disabled]) { @apply bg-elev-2 }
+  .mrow[disabled] { @apply cursor-default text-t3 }
+  .mrow.on { @apply text-accent }
+  .mrow.danger:hover { @apply text-danger }
+  .mrow .ml { @apply flex-auto }
+  .mrow .mh { @apply whitespace-nowrap font-mono text-2xs text-t3 }
+  .mrow.wants .mh { @apply text-wants }
+  .msep { @apply mx-2 my-4 h-1 bg-line }
+
+  /* ── notices ─────────────────────────────────────────────────────────────── */
+  /* A refresh that blanks the screen looks like a crash. This is the only signal. */
+  #loading {
+    @apply fixed top-0 left-0 z-40 h-2 w-0 bg-accent opacity-0
+           transition-[width,opacity] duration-250 ease-out;
+  }
+  #loading.on { @apply opacity-100 }
+  .stale {
+    @apply fixed top-10 left-1/2 z-50 flex -translate-x-1/2 items-center gap-12
+           rounded-ctl border border-primary-edge bg-elev-2 px-12 py-9 text-md text-t1
+           shadow-notice;
+  }
+  .toast {
+    @apply fixed bottom-18 left-1/2 z-20 hidden max-w-[min(90vw,52ch)] -translate-x-1/2
+           rounded-ctl border border-warn-edge bg-elev-2 px-13 py-9 text-md text-wants
+           shadow-toast;
+  }
+  .toast.on { @apply block }
+
+  /* ── phone / tablet: exactly one surface, one rule ───────────────────────── */
+  nav { display: none }
+  @media (width <= 1280px) {
+    main { @apply grid-cols-[minmax(0,272px)_minmax(0,1fr)] }
+  }
+  @media (width <= 900px) {
+    main { @apply grid-cols-[1fr] }
+    main .side, main .pane, main .changes { display: none }
+    main[data-surface="work"] .side,
+    main[data-surface="session"] .pane,
+    main[data-surface="changes"] .changes { display: flex }
+    .keys { @apply flex }
+    nav {
+      @apply flex flex-none border-t border-line bg-panel;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    nav button { @apply flex-1 border-0 bg-none pt-11 pb-10 text-xs tracking-[.04em] text-t3 }
+    nav button[aria-current="true"] { @apply text-t1; box-shadow: inset 0 -2px 0 var(--color-accent) }
+    .sheet { @apply inset-0 top-0 left-0 max-h-full w-full translate-none rounded-none }
+    .stats span:nth-child(n+3) { display: none }
+  }
+  .b.narrow { display: none }
+  @media (width <= 560px) {
+    header { @apply gap-8 px-10 }
+    .brand .tool { display: none }
+    .stats span:nth-child(n+2) { display: none }
+    .b .lbl { display: none }
+    .b.wide { display: none }
+    .b.narrow { @apply inline-block }
+  }
+
+  /* Full-screen: the terminal and nothing else. */
+  body.full header, body.full .side, body.full .changes, body.full nav { display: none }
+  body.full main { @apply grid-cols-[1fr] }
+  body.full main .pane { display: flex }
+}

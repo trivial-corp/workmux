@@ -56,9 +56,37 @@ make dev ROOT=~/path/to/some-repo    # go run, frontend from disk, subprocesses 
                                      # :4316, and never joins the workmux you use
 make test                            # go test ./...
 make lint                            # gofmt -l must be empty, then go vet
+make css                             # only after editing internal/web/src/app.css
 ```
 
 Run `make lint && make test` before committing. Both are what CI runs.
+
+### The frontend
+
+One page, `internal/web/dist/index.html`: the markup, and an inline script that
+builds every element with `el()`. Editing it is a refresh under `make dev`.
+
+Its CSS is **Tailwind v4**, written in `internal/web/src/app.css` and built to a
+content-hashed `internal/web/dist/app.<hash>.css` that the page links and the
+binary embeds. The built file is committed, so a clean checkout still builds with
+nothing but Go — you only need the CLI (`brew install tailwindcss`) to *change*
+the styling, and then it is `make css`, which rewrites the `<link>` with the new
+hash. The hash is what lets the server send it `immutable` for a year and still
+have an upgrade take effect.
+
+Two theme decisions in that file are load-bearing: `--spacing: 1px`, so `p-7` is
+the 7px this interface was tuned in, and a `--text-*` ladder from 10px to 17px
+where every entry pins `line-height: 1.5` — Tailwind pairs its own line-height
+with each size, and leaving that out silently restyles every row on the page.
+
+New UI should use utilities in the markup. Repeated and state-driven components —
+the button, the channel strip, the diff, menu rows — stay as `@apply`'d classes in
+`@layer components`, because their variants are chosen in JS and their states come
+from `data-` attributes on a parent. A rule there and a class in the markup are
+the same vocabulary, so moving one into the other is a copy-paste.
+
+There is no hex outside the `@theme` block. If a colour is missing, name it there
+for what it is for.
 
 ### How this code is built
 

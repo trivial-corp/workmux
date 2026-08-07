@@ -2,7 +2,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: build test test-race lint run dev watch debug install deploy npm tidy dist clean
+.PHONY: build css test test-race lint run dev watch debug install deploy npm tidy dist clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o workmux ./cmd/workmux
@@ -23,6 +23,29 @@ lint:
 	@if command -v node >/dev/null; then node scripts/check-frontend.js && \
 	   node scripts/check-frontend-refs.js; \
 	 else echo "  (node absent — skipping the frontend checks)"; fi
+
+# The page's CSS is Tailwind, written in internal/web/src/app.css. The built file is
+# committed, so a clean checkout still builds with nothing but Go — this target is only
+# for changing the styling, and only then do you need the CLI:
+#
+#   brew install tailwindcss     # or the standalone binary from the release page
+#
+# The output name carries a hash of its contents, which is what lets the server send it
+# with a one-year cache and still have an upgrade take effect. That hash goes into the
+# <link> here, so the two can never disagree.
+CSS_SRC := internal/web/src/app.css
+DIST    := internal/web/dist
+css:
+	@command -v tailwindcss >/dev/null || { \
+	  echo "install tailwindcss (brew install tailwindcss), then: make css"; exit 1; }
+	@rm -f $(DIST)/app.*.css
+	@tailwindcss -i $(CSS_SRC) -o $(DIST)/app.tmp.css --minify
+	@hash=$$( (shasum -a 256 $(DIST)/app.tmp.css 2>/dev/null || sha256sum $(DIST)/app.tmp.css) \
+	          | cut -c1-8 ); \
+	 mv $(DIST)/app.tmp.css $(DIST)/app.$$hash.css; \
+	 sed -E 's|href="/app\.[A-Za-z0-9]*\.css"|href="/app.'$$hash'.css"|' $(DIST)/index.html \
+	   > $(DIST)/index.tmp && mv $(DIST)/index.tmp $(DIST)/index.html; \
+	 echo "  $(DIST)/app.$$hash.css  $$(wc -c < $(DIST)/app.$$hash.css) bytes"
 
 # Run straight from source against any project — no build, no install.
 #   make dev ROOT=~/code/my-drupal-site
