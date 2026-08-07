@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.37826e60.css">
+<link rel="stylesheet" href="/app.65eb88ab.css">
 
 <div id="loading"></div>
 <header>
@@ -15,13 +15,16 @@
       title="Which repositories this server is holding">…</button><span class="tool">workmux</span></div>
   <div class="stats" id="stats"></div>
   <div class="acts">
-    <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">▤ Stacks</button>
-  <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
-      ◇<span class="lbl"> MCP</span></button>
+    <button class="b wide" id="btn-stacks" onclick="openSheet('stacks')" title="Running stacks and what they cost">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="m12 2 8.5 4.5-8.5 4.5-8.5-4.5Z"/><path d="m3.5 11.5 8.5 4.5 8.5-4.5"/><path d="m3.5 16.5 8.5 4.5 8.5-4.5"/></svg></span><span class="lbl">Stacks</span></button>
+    <button class="b wide" id="btn-mcp" onclick="openSheet('mcp')" title="MCP servers">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M12 22v-3"/><path d="M9 7V2M15 7V2"/><path d="M18 7v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V7Z"/></svg></span><span class="lbl">MCP</span></button>
     <button class="b wide" onclick="openSheet('log')" title="What this workmux process has been doing">
-      ▤<span class="lbl"> Server log</span></button>
-    <button class="b icon narrow" onclick="openSheet('more')" title="More">⋯</button>
-    <button class="b icon" onclick="poll(true)" title="Refresh">↻</button>
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8M16 17H8"/></svg></span><span class="lbl">Server log</span></button>
+    <button class="b icon narrow" onclick="openSheet('more')" title="More">
+      <span class="ic"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="0.8"/><circle cx="12" cy="12" r="0.8"/><circle cx="19" cy="12" r="0.8"/></svg></span></button>
+    <button class="b icon" onclick="poll(true)" title="Refresh">
+      <span class="ic"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg></span></button>
   </div>
 </header>
 
@@ -37,7 +40,7 @@
   <div class="side">
     <div class="lhead">
       <button class="b primary" onclick="openSheet('new')" title="Start a new piece of work (⌘N)">
-        ＋<span class="lbl"> New work</span></button>
+        <span class="ic"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg></span><span class="lbl">New work</span></button>
       <input id="filter" type="search" placeholder="Filter (/)" autocomplete="off"
              spellcheck="false" aria-label="Filter worktrees">
     </div>
@@ -71,6 +74,23 @@ const el = (t, c, ...kids) => {
   return n;
 };
 const $ = (id) => document.getElementById(id);
+
+// Inline stroke icons (lucide outlines), because text glyphs (▤ ◇ ↻ ⋯) render at
+// whatever size and weight the font fancies, which made every control look slightly
+// wrong in a different way. The stroke attributes live in app.css so these stay short.
+const ICONS = {
+  chevron: '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>',
+  more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="0.8"/><circle cx="12" cy="12" r="0.8"/><circle cx="19" cy="12" r="0.8"/></svg>',
+  external: '<svg viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
+  play: '<svg viewBox="0 0 24 24"><path d="m6 4 14 8-14 8Z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+  maximize: '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
+  back: '<svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>',
+};
+const ic = (name) => { const s = el("span", "ic"); s.innerHTML = ICONS[name]; return s; };
+const caret = () => { const s = el("span", "caret"); s.innerHTML = ICONS.chevron; return s; };
 
 let STATE = null, WORK = [], SEL = null, SESSIONS = [], ACTIVE = null, FILTER = "";
 const PANES = new Map();   // session id → {term, fit, ws, dead}
@@ -193,7 +213,7 @@ async function poll(userAsked) {
   document.title = here + " · workmux";
   const label = $("proj");
   label.textContent = here;
-  if (multi()) label.append(el("span", "caret", "▾"));
+  if (multi()) label.append(caret());
 
   const rows = visible();
   const stats = $("stats");
@@ -350,7 +370,7 @@ function strip(w, tone) {
   // per-row menu rather than an X you can hit while reaching for the row. The main
   // checkout has no menu at all: it is where the repository lives.
   if (!w.is_default) {
-    const more = el("button", "rowmenu", "⋯");
+    const more = el("button", "rowmenu", ic("more"));
     more.title = "What to do with this work";
     more.setAttribute("aria-label", "More");
     more.onclick = (e) => {
@@ -511,7 +531,7 @@ function tabs(active) {
   else if (!cur && mine.length) sess.append(el("span", "n", String(mine.length)));
   // Another one is waiting on you, and it's behind the caret.
   if (mine.some(s => s !== cur && sessionWaiting(s, w))) sess.append(el("i", "dot wants other"));
-  sess.append(el("span", "caret", "▾"));
+  sess.append(caret());
   // The whole tab opens the menu, caret or not: a 10px chevron is a small target for the
   // only way to reach what's behind it. Getting back to the terminal is the first thing
   // in the menu, so it is still one click away.
@@ -532,7 +552,7 @@ function tabs(active) {
   const n = CH && CH.for === SEL ? (CH.files || []).length : 0;
   if (n) git.append(el("span", "n", String(n)));
   if (w && w.behind > 0) git.append(el("span", "n", "⇣" + w.behind));
-  git.append(el("span", "caret", "▾"));
+  git.append(caret());
   git.onclick = () => gitMenu(git, w);
   seg.append(git);
   return seg;
@@ -677,7 +697,8 @@ function renderBar() {
   const mine = SESSIONS.filter(s => s.cwd === SEL);
   const group = () => { const g = el("div", "group"); bar.append(g); return g; };
   const btn = (into, label, fn, opts) => {
-    const b = el("button", "b" + (opts && opts.cls ? " " + opts.cls : ""), label);
+    const b = el("button", "b" + (opts && opts.cls ? " " + opts.cls : ""),
+                 ...(Array.isArray(label) ? label : [label]));
     b.onclick = fn;
     if (opts && opts.title) b.title = opts.title;
     into.append(b);
@@ -689,19 +710,19 @@ function renderBar() {
   if (projOf(w).stack_enabled) {
     const g3 = group();
     if (w.stack) {
-      if (w.stack.url) btn(g3, "↗ open", () => window.open(w.stack.url, "_blank"),
+      if (w.stack.url) btn(g3, [ic("external"), "Open"], () => window.open(w.stack.url, "_blank"),
                            { title: w.stack.url });
       btn(g3, "Logs", () => start("logs"), { title: "Tail " + w.stack.slot + "'s containers" });
-      btn(g3, "↻ restart", () => stackAction("restart", w));
-      btn(g3, "■ stop", () => stackAction("stop", w), { cls: "danger" });
+      btn(g3, [ic("refresh"), "Restart"], () => stackAction("restart", w));
+      btn(g3, [ic("stop"), "Stop"], () => stackAction("stop", w), { cls: "danger" });
     } else {
-      btn(g3, "▶ start app", () => stackAction("up", w),
+      btn(g3, [ic("play"), "Start app"], () => stackAction("up", w),
           { title: "Containers for this work — it doesn't need them to exist" });
     }
   }
   if (ACTIVE) {
     const g5 = group();
-    btn(g5, "⤢", toggleFull, { cls: "icon", title: "Whole window" });
+    btn(g5, [ic("maximize")], toggleFull, { cls: "icon", title: "Whole window" });
     btn(g5, "A−", () => setFont(-1), { cls: "icon", title: "Smaller text" });
     btn(g5, "A+", () => setFont(1), { cls: "icon", title: "Bigger text" });
   }
@@ -772,6 +793,26 @@ function showEmpty(existing) {
     fact("path", w.path.replace(/^.*\/(?=[^/]+\/[^/]+$)/, "…/"));
     box.append(facts);
   }
+  // The sentence above used to be the only way to learn what to do next, and the
+  // doing was two clicks away behind the Session menu. The actions belong here —
+  // but only the ones this project's agent actually has (absent capability,
+  // absent affordance).
+  if (w) {
+    const can = caps(w);
+    const acts = el("div", "row");
+    const act = (cls, label, fn) => {
+      const b = el("button", "b " + cls, label);
+      b.onclick = fn;
+      acts.append(b);
+    };
+    if (w.agents && w.agents.length && can.attach) {
+      act("primary", "Resume " + (w.agents[0].name || can.name || "the agent"), () => start("resume"));
+    } else if ((!w.agents || !w.agents.length) && can.run) {
+      act("primary", "Start " + (can.name || "an agent"), () => start("agent"));
+    }
+    act("", "Open a shell", () => start("shell"));
+    box.append(acts);
+  }
   t.append(box);
 }
 
@@ -840,8 +881,10 @@ async function showPane(id) {
       cursorBlink: true, scrollback: 8000,
       // ⌥ must reach the program as a meta prefix, or word-wise editing does nothing.
       macOptionIsMeta: true, allowProposedApi: true,
-      theme: { background: "#0e0e13", foreground: "#e7e7ee", cursor: "#e7e7ee",
-               selectionBackground: "#2b3a55" },
+      // The terminal's background matches --color-ink, so the pane and the page read
+      // as one surface instead of a canvas floating in a differently-dark box.
+      theme: { background: "#0b0d11", foreground: "#e7e7ee", cursor: "#e7e7ee",
+               selectionBackground: "#2c3b58" },
     });
     const fit = new GhosttyWeb.FitAddon();
     term.loadAddon(fit);
@@ -1333,7 +1376,7 @@ function renderChanges() {
   const w = selected();
   if (!w) return;
   bar.append(tabs("changes"));
-  const refresh = el("button", "b icon", "↻");
+  const refresh = el("button", "b icon", ic("refresh"));
   refresh.title = "Re-read this worktree";
   refresh.onclick = () => loadChanges(true);
   bar.append(refresh);
@@ -1448,7 +1491,7 @@ function paintDiff(title, diff, error) {
   const bar = $("chbar"), body = $("chbody");
   bar.textContent = ""; body.textContent = "";
   bar.append(tabs("changes"));
-  const back = el("button", "b", "‹ files");
+  const back = el("button", "b", ic("back"), "Files");
   back.onclick = () => { CHFILE = null; CHREV = null; renderChanges(); };
   bar.append(back);
   bar.append(el("span", "who", title));
@@ -1528,7 +1571,7 @@ function projectMenu(anchor) {
     }
     items.push({ sep: true });
   }
-  items.push({ label: "＋ Add a repository…", hint: "or run workmux in it", go: addProject });
+  items.push({ label: "Add a repository…", hint: "or run workmux in it", go: addProject });
   // Any of them, not just the one you happen to be looking at. Offering only the
   // current project meant dropping another one first required selecting work inside
   // it, and a repository whose directory is gone has no work to select. The list is
@@ -1821,12 +1864,12 @@ async function renderMcp(refresh) {
     if (x.suggest) card.append(el("div", "dt", "found at " + x.suggest + " — not on the PATH it runs with"));
     const row = el("div", "row");
     if (x.state === "auth") {
-      const b = el("button", "b", "authenticate");
+      const b = el("button", "b", "Authenticate");
       b.title = "Ask the agent CLI where to authorize this server";
       b.onclick = () => authenticate(where.id, x.name, card, b);
       row.append(b);
     }
-    const rm = el("button", "b", "remove");
+    const rm = el("button", "b", "Remove");
     rm.onclick = async () => {
       if (!confirm("Remove MCP server " + x.name + (x.scope ? " (" + x.scope + ")" : "") + "?")) return;
       const scope = (x.scope || "").startsWith("local") ? "local" : x.scope;
@@ -1840,9 +1883,9 @@ async function renderMcp(refresh) {
     body.append(card);
   }
 
-  const addBtn = el("button", "b", "＋ add a server");
+  const addBtn = el("button", "b", ic("plus"), "Add a server");
   addBtn.onclick = () => renderMcpAdd();
-  const refreshBtn = el("button", "b", "↻ re-check");
+  const refreshBtn = el("button", "b", ic("refresh"), "Re-check");
   refreshBtn.onclick = () => renderMcp(true);
   foot.append(addBtn, refreshBtn);
 }
@@ -1889,7 +1932,7 @@ async function authenticate(project, name, card, btn) {
     box.append(el("div", "dt",
       "the redirect page will fail if your browser isn't on this machine — that's fine, " +
       "copy the URL it lands on and paste it into the session below"));
-    const t = el("button", "b", "finish in a terminal");
+    const t = el("button", "b", "Finish in a terminal");
     t.onclick = async () => { closeSheet(); await start("mcpauth", name); };
     box.append(t);
   } else {
@@ -1942,7 +1985,7 @@ function renderMcpAdd() {
     if (r.error) { status.textContent = r.error; return; }
     renderMcp(true);
   };
-  const back = el("button", "b", "‹ back");
+  const back = el("button", "b", ic("back"), "Back");
   back.onclick = () => renderMcp(false);
   foot.append(save, back, status);
 }
@@ -1968,7 +2011,8 @@ async function renderLog() {
   }
   const only = el("button", "b" + (LOG_BAD_ONLY ? " on" : ""), "Problems only");
   only.onclick = () => { LOG_BAD_ONLY = !LOG_BAD_ONLY; renderLog(); };
-  const again = el("button", "b icon", "↻");
+  const again = el("button", "b icon", ic("refresh"));
+  again.title = "Re-read the log";
   again.onclick = renderLog;
   foot.append(only, again);
   body.scrollTop = body.scrollHeight;
@@ -2067,7 +2111,7 @@ async function renderStacks(quiet) {
 
     const row = el("div", "row");
     if (s.url) {
-      const a = el("a", "b", "open");
+      const a = el("a", "b", ic("external"), "Open");
       a.href = s.url; a.target = "_blank"; a.rel = "noopener";
       row.append(a);
     }
@@ -2078,10 +2122,10 @@ async function renderStacks(quiet) {
       row.append(b);
     };
     const on = w || { stack: s, project: where.id, path: s.path };
-    act("restart", async () => { await stackAction("restart", on); renderStacks(true); });
-    act("stop", async () => { await stackAction("stop", on); renderStacks(true); },
+    act("Restart", async () => { await stackAction("restart", on); renderStacks(true); });
+    act("Stop", async () => { await stackAction("stop", on); renderStacks(true); },
         "Frees the slot and the memory it is holding");
-    if (w) act("go to work", () => {
+    if (w) act("Go to work", () => {
       closeSheet();
       if (ONLY && ONLY !== w.project) setOnly(w.project);
       SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
@@ -2090,7 +2134,7 @@ async function renderStacks(quiet) {
     body.append(card);
   }
 
-  const again = el("button", "b", "↻ refresh");
+  const again = el("button", "b", ic("refresh"), "Refresh");
   again.onclick = () => renderStacks(false);
   foot.append(again);
 }
@@ -2223,3 +2267,4 @@ poll(true);
 setInterval(() => { if (!document.hidden) poll(false); }, 6000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(false); });
 </script>
+
