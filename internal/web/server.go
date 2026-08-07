@@ -85,6 +85,12 @@ type Server struct {
 	// Sessions serves terminals. Nil means --no-terminal, and then those routes
 	// don't exist at all rather than answering "disabled".
 	Sessions *Sessions
+	// CopyImage puts a pasted image on this machine's clipboard. Nil means the real
+	// one. It is a field because it reaches outside the process and outside the
+	// browser: `go test ./...` used to replace the clipboard of whoever ran it with a
+	// one-pixel PNG, which is a rude thing for a test to do and impossible to explain
+	// when the next ⌃V pastes nothing.
+	CopyImage func(path string) bool
 }
 
 // agentIDRe bounds what can be passed to an attach command.

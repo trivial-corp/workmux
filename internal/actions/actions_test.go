@@ -25,6 +25,9 @@ func TestBranchNameComesFromTheTask(t *testing.T) {
 		"hotel search times out on long stays": "hotel-search-times-out",
 		"we should fix the flaky login test":   "flaky-login-test",
 		"Add support for WebP images":          "support-webp-images",
+		// A screenshot pasted into the task leaves its path in the text, usually ahead of
+		// the words. The branch is named after the work, not after the picture.
+		"/var/folders/t/9z/T/workmux-pastes-501/paste-1712.png the header wraps on iPhone": "header-wraps-iphone",
 	}
 	for prompt, want := range cases {
 		if got := slugify(nameFromTask(prompt)); got != want {

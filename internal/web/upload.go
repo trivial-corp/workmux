@@ -71,9 +71,25 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	// If this machine shares your clipboard, the agent can read the image itself and
 	// nothing needs typing. Otherwise the caller falls back to pasting the path.
+	//
+	// clipboard=0 is a caller saying it wants the path and nothing else — the New work
+	// sheet, which has no agent to press ⌃V at. Writing the clipboard anyway would
+	// throw away whatever you had copied every time you described a task with a
+	// screenshot, and then the next ⌃V in a terminal pastes the wrong picture.
+	clip := false
+	if r.URL.Query().Get("clipboard") != "0" {
+		clip = s.copyImage(path)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path": path, "bytes": len(body), "clipboard": copyImageToClipboard(path),
+		"path": path, "bytes": len(body), "clipboard": clip,
 	})
+}
+
+func (s *Server) copyImage(path string) bool {
+	if s.CopyImage != nil {
+		return s.CopyImage(path)
+	}
+	return copyImageToClipboard(path)
 }
 
 // uploadDir is a per-user directory outside any repository — a pasted screenshot is
