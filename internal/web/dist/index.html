@@ -5,402 +5,9 @@
 <!-- Ghostty's own VT, compiled to wasm, with an xterm-compatible API. One vendored
      file: the wasm is inlined, so there is nothing to fetch and it works offline. It
      renders to a canvas, so there is no stylesheet to load. -->
-<style>
-/* workmux — a patch bay for parallel work.
- *
- * The design idea: each piece of work is a channel strip. A status rail down its
- * left edge carries the one thing you need at a glance, the machine strings
- * (branches, shas, slots, counts) are set in mono because they *are* the content,
- * and colour is spent only on state — never on decoration. Strips are grouped into
- * bands, so the ordering the server computes is visible instead of implied.
- */
-:root {
-  color-scheme: dark;
-  --ink:#0A0C0F; --panel:#11151A; --elev:#161B22; --elev-2:#1B212A;
-  --line:#212932; --line-soft:#181E26;
-  --t1:#E4E9F0; --t2:#A9B4C4; --t3:#77839A;
-  --wants:#F0B429; --live:#2ED3C6; --idle:#5C6675; --up:#4ADE80;
-  --danger:#F27272; --accent:#8AA0FF;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --r:7px;
-}
-* { box-sizing:border-box; min-width:0; }
-html, body { height:100%; }
-body { margin:0; background:var(--ink); color:var(--t1); font:13px/1.5 var(--sans);
-       overflow:hidden; display:flex; flex-direction:column;
-       -webkit-font-smoothing:antialiased; }
-button { font:inherit; color:inherit; }
-::selection { background:#2b3a55; }
-
-/* ── header ──────────────────────────────────────────────────────────────── */
-header { flex:0 0 auto; display:flex; align-items:center; gap:14px; padding:0 12px;
-         height:46px; border-bottom:1px solid var(--line); background:var(--panel); }
-.brand { font-family:var(--mono); font-size:13px; letter-spacing:-0.01em; white-space:nowrap;
-         display:flex; align-items:baseline; gap:5px; flex:0 0 auto; }
-.brand .proj { font-weight:600; color:var(--t1); font:inherit; font-weight:600;
-               background:none; border:0; padding:2px 5px; margin-left:-5px; border-radius:5px;
-               cursor:pointer; display:flex; align-items:baseline; gap:5px; }
-.brand .proj:hover { background:var(--elev-2); }
-.brand .proj .caret { border-left:0; padding-left:0; margin-left:0; }
-/* Which repo a row belongs to. Only drawn when there is more than one, so a
-   single-project server looks exactly as it did. */
-.strip .pj { font-family:var(--mono); font-size:10px; color:var(--t3); padding:1px 5px;
-             border:1px solid var(--line); border-radius:4px; white-space:nowrap; }
-.brand .tool { color:var(--t3); font-size:11px; }
-.stats { display:flex; gap:0; align-items:center; flex:1 1 auto; overflow:hidden;
-         font-family:var(--mono); font-size:11px; color:var(--t3); }
-.stats span { padding:0 9px; border-left:1px solid var(--line-soft); white-space:nowrap; }
-.stats span:first-child { border-left:0; padding-left:0; }
-.acts { display:flex; gap:6px; flex:0 0 auto; }
-
-/* ── buttons: one shape, three weights ───────────────────────────────────── */
-.b { background:transparent; border:1px solid var(--line); border-radius:var(--r);
-     padding:4px 9px; font-size:12px; cursor:pointer; white-space:nowrap;
-     color:var(--t2); transition:border-color .12s, color .12s, background .12s;
-     flex:0 0 auto; }
-.b:hover { border-color:#31404f; color:var(--t1); background:var(--elev); }
-.b:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
-.b.primary { border-color:#37436b; color:#c9d4ff; background:#1a1f33; }
-.b.primary:hover { border-color:var(--accent); }
-.b.danger:hover { border-color:#5c2b2b; color:var(--danger); background:#1e1315; }
-.b.on { border-color:var(--accent); color:#cfe0ff; }
-.b.dead { color:var(--t3); text-decoration:line-through; }
-.b.icon { font-family:var(--mono); }
-.b[disabled] { opacity:.5; cursor:default; }
-.group { display:flex; gap:6px; padding-right:8px; margin-right:2px; flex:0 0 auto;
-         border-right:1px solid var(--line-soft); }
-.group:last-child { border-right:0; padding-right:0; }
-
-/* ── layout ──────────────────────────────────────────────────────────────── */
-main { flex:1 1 auto; display:grid; min-height:0;
-       grid-template-columns:minmax(0,304px) minmax(0,1fr); }
-/* The session and the diff share one column, switched by the tabs in the toolbar. */
-main .changes { display:none; }
-main[data-surface="changes"] .changes { display:flex; }
-main[data-surface="changes"] .pane { display:none; }
-.side, .pane, .changes { display:flex; flex-direction:column; min-width:0; min-height:0; }
-.side { border-right:1px solid var(--line); background:var(--panel); }
-.list { flex:1 1 auto; overflow-y:auto; min-height:0; }
-/* New work and the filter live over the list they act on, not in the far corner of the
-   window. The filter is the answer to a long list: the names are the agent's, they change,
-   and scrolling forty of them to find one is not finding it. */
-.lhead { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:9px 10px;
-         border-bottom:1px solid var(--line); }
-.lhead .b.primary { flex:0 0 auto; }
-.lhead input { flex:1 1 auto; min-width:0; height:30px; padding:0 9px; border-radius:var(--r);
-               border:1px solid var(--line); background:var(--ink); color:var(--t1);
-               font:inherit; font-size:12px; }
-.lhead input::placeholder { color:var(--t3); }
-.lhead input:focus { outline:none; border-color:var(--accent); }
-.changes { background:var(--panel); }
-
-/* ── bands: the ordering, made visible ───────────────────────────────────── */
-.band { border-bottom:1px solid var(--line-soft); padding:0 0 6px; }
-.band:last-child { border-bottom:0; }
-.band > h2 { margin:0; padding:12px 12px 6px; font:inherit; font-size:10px; font-weight:600;
-             letter-spacing:.15em; text-transform:uppercase; color:var(--t3);
-             display:flex; align-items:center; gap:8px; }
-.band > h2 .count { font-family:var(--mono); letter-spacing:0; font-weight:400; opacity:.7; }
-.band > h2::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
-.band[data-tone="wants"] > h2 { color:var(--wants); }
-
-/* ── the channel strip ───────────────────────────────────────────────────── */
-.strip { display:flex; gap:10px; padding:7px 12px 8px 0; cursor:pointer; position:relative;
-         border-left:0; }
-.strip:hover { background:var(--elev); }
-.strip[aria-selected="true"] { background:var(--elev-2); box-shadow:inset 0 0 0 1px #2b3444; }
-.strip[aria-selected="true"] .rail { width:3px; box-shadow:0 0 10px 0 currentColor; }
-.strip[aria-selected="true"] .branch { color:#fff; }
-.strip .rail { flex:0 0 3px; border-radius:0 2px 2px 0; background:var(--idle);
-               margin-right:1px; }
-.strip[data-tone="wants"] .rail { background:var(--wants); }
-.strip[data-tone="live"]  .rail { background:var(--live); }
-.strip[data-tone="up"]    .rail { background:var(--up); }
-.strip[data-tone="base"]  .rail { background:#2a313b; }
-/* The one moving thing in the interface: work in progress breathes. */
-@media (prefers-reduced-motion: no-preference) {
-  .strip[data-tone="live"] .rail { animation:breathe 2.6s ease-in-out infinite; }
-}
-@keyframes breathe { 0%,100% { opacity:1 } 50% { opacity:.45 } }
-.strip .body { flex:1 1 auto; display:grid; gap:3px; min-width:0; }
-.strip .head { display:flex; align-items:baseline; gap:8px; min-width:0; }
-.strip .seen { margin-left:auto; flex:0 0 auto; font-family:var(--mono); font-size:10px;
-               color:var(--t3); white-space:nowrap; }
-.strip .seen.last { color:var(--wants); }
-.strip { position:relative; }
-/* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width box
-   floating above its own label. */
-.sbody label.check { display:flex; gap:9px; align-items:center; margin:2px 0;
-                     font-size:12.5px; color:var(--t2); cursor:pointer; }
-.sheet .check input { width:15px; height:15px; flex:0 0 auto; accent-color:var(--danger); }
-/* A button that destroys something says so before you hover it, unlike the ones that
-   merely stop a container. */
-.b.destroy { border-color:#5c2b2b; color:#ff9d9d; background:#1e1315; }
-.b.destroy:hover { border-color:#8a3a3a; color:#ffc2c2; background:#2a1618; }
-.strip .rowmenu { position:absolute; top:6px; right:4px; width:24px; height:22px; padding:0;
-                  border:0; border-radius:6px; background:none; color:var(--t3);
-                  font-size:13px; line-height:1; opacity:0; cursor:pointer; }
-.strip:hover .rowmenu, .strip .rowmenu:focus-visible, .strip[aria-selected="true"] .rowmenu {
-  opacity:1; }
-.strip .rowmenu:hover { background:var(--elev-2); color:var(--t1); }
-/* Reaching for it must not run into the timestamp underneath. */
-.strip:hover .seen, .strip[aria-selected="true"] .seen { padding-right:22px; }
-.strip .branch { font-family:var(--mono); font-size:12.5px; font-weight:600; color:var(--t1);
-                 overflow-wrap:anywhere; min-width:0; }
-.strip[data-tone="base"] .branch { font-weight:400; color:var(--t2); }
-.strip .said { font-size:11.5px; color:var(--t2); overflow:hidden; text-overflow:ellipsis;
-               white-space:nowrap; }
-.strip .chips { display:flex; flex-wrap:wrap; gap:4px 6px; align-items:center;
-                font-family:var(--mono); font-size:10.5px; color:var(--t3); }
-.chip { display:inline-flex; align-items:center; gap:4px; }
-.chip.state { color:var(--wants); }
-.seg button .lbl { display:inline-block; max-width:22ch; overflow:hidden; text-overflow:ellipsis;
-                   white-space:nowrap; vertical-align:bottom; }
-/* inline-block, or the width is ignored: the tab is not a flex container, and an inline
-   <i> with a width is a dot nobody can see. */
-.seg button .dot.wants { display:inline-block; width:6px; height:6px; margin:0 5px 1px 0;
-                         background:var(--wants); vertical-align:middle; flex:0 0 auto; }
-/* One waiting behind the menu rather than in front of you: same colour, hollow, and it
-   sits after the count instead of being crushed against it. */
-.seg button .dot.other { margin:0 0 1px 7px; background:none;
-                         box-shadow:inset 0 0 0 2px var(--wants); }
-.popover .mrow.wants .mh { color:var(--wants); }
-.chip.app { color:var(--up); }
-.chip.pr { color:var(--t3); }
-.chip.pr::before { content:""; }
-.dot { width:5px; height:5px; border-radius:50%; background:currentColor; flex:0 0 auto; }
-
-/* ── session pane ────────────────────────────────────────────────────────── */
-.bar { flex:0 0 auto; display:flex; align-items:center; gap:6px; padding:7px 10px;
-       border-bottom:1px solid var(--line); overflow-x:auto; scrollbar-width:none;
-       background:var(--panel); }
-.bar::-webkit-scrollbar { display:none; }
-.bar .who { font-family:var(--mono); font-size:11px; color:var(--t3); white-space:nowrap;
-            overflow:hidden; text-overflow:ellipsis; }
-.seg { display:flex; flex:0 0 auto; border:1px solid var(--line); border-radius:var(--r);
-       overflow:hidden; }
-.seg button { background:transparent; border:0; padding:4px 11px; font-size:12px;
-              color:var(--t3); cursor:pointer; white-space:nowrap; }
-.seg button + button { border-left:1px solid var(--line); }
-.seg button[aria-current="true"] { background:var(--elev-2); color:var(--t1); }
-.seg .n { font-family:var(--mono); font-size:10.5px; opacity:.7; margin-left:5px; }
-.tabs { display:flex; gap:2px; flex:0 0 auto; align-items:stretch; }
-.tab { display:inline-flex; align-items:center; gap:7px; background:transparent; border:0;
-       border-bottom:2px solid transparent; padding:5px 10px 4px; font-size:12px;
-       color:var(--t3); cursor:pointer; white-space:nowrap; max-width:26ch; }
-.tab:hover { color:var(--t1); }
-.tab[aria-current="true"] { color:var(--t1); border-bottom-color:var(--accent); }
-.tab .nm { overflow:hidden; text-overflow:ellipsis; }
-.tab .x { color:var(--t3); font-size:11px; padding:0 1px; border-radius:3px; }
-.tab .x:hover { color:var(--danger); background:#1e1315; }
-.tab.dead .nm { text-decoration:line-through; opacity:.6; }
-@media (max-width:900px) { .seg { display:none; } }   /* the bottom nav does this */
-.term { flex:1 1 auto; min-height:0; background:var(--ink); overflow:hidden; position:relative; }
-/* One wrapper per session, created once and kept. A terminal cannot be re-opened by calling
-   open() twice, and clearing the container to re-open it is how a pane came back
-   blank after you switched tabs and returned. */
-.wrap { position:absolute; inset:0; padding:8px 4px 4px 10px; display:none; }
-.wrap.on { display:block; }
-.wrap canvas { display:block; }
-.hollow { padding:20px 16px; max-width:52ch; display:grid; gap:10px; }
-.hollow h3 { margin:0; font-size:13px; font-weight:600; color:var(--t2); }
-.hollow p { margin:0; font-size:12.5px; color:var(--t3); }
-.hollow h3 { font-family:var(--mono); font-size:13px; color:var(--t1); }
-.facts { margin:8px 0 0; display:grid; grid-template-columns:auto 1fr; gap:5px 14px;
-         font-family:var(--mono); font-size:11.5px; align-items:baseline; }
-.facts dt { color:var(--t3); text-align:right; }
-.facts dd { margin:0; color:var(--t2); overflow-wrap:anywhere; }
-.keys { display:none; gap:5px; padding:7px 10px; border-top:1px solid var(--line);
-        flex:0 0 auto; overflow-x:auto; scrollbar-width:none;
-        /* Opaque and above the terminal: it was transparent, so the last rows of
-           output were visible through the keys and looked like overlap. */
-        background:var(--panel); position:relative; z-index:2; }
-.keys::-webkit-scrollbar { display:none; }
-.keys .b { min-width:3.2em; text-align:center; font-family:var(--mono); padding:6px 8px; }
-
-/* ── changes ─────────────────────────────────────────────────────────────── */
-.chbody { flex:1 1 auto; overflow-y:auto; padding:0 0 12px; }
-.chsect { padding:12px 12px 5px; font-size:10px; font-weight:600; letter-spacing:.15em;
-          text-transform:uppercase; color:var(--t3); display:flex; gap:8px; align-items:center; }
-.chsect .count { font-family:var(--mono); letter-spacing:0; font-weight:400; }
-.chsect::after { content:""; flex:1 1 auto; height:1px; background:var(--line-soft); }
-.chrow { display:flex; gap:10px; align-items:baseline; padding:4px 12px; cursor:pointer; }
-.chrow:hover { background:var(--elev); }
-.chrow[aria-selected="true"] { background:var(--elev-2); }
-.chrow .st { font-family:var(--mono); font-size:10px; color:var(--t3); flex:0 0 2ch;
-             text-align:center; }
-.chrow .f { flex:1 1 auto; font-family:var(--mono); font-size:11.5px; overflow-wrap:anywhere; }
-.chrow .n { font-family:var(--mono); font-size:10.5px; white-space:nowrap; color:var(--t3); }
-.chrow .n .a { color:var(--up); } .chrow .n .d { color:var(--danger); }
-/* A sha is a fixed-width label, and it gets its own room: it ran into the subject. */
-.chrow .sha { flex:0 0 9ch; font-family:var(--mono); font-size:10.5px; color:var(--accent);
-              opacity:.85; }
-.chrow .subject { flex:1 1 auto; font-size:12px; color:var(--t2); overflow-wrap:anywhere; }
-.chrow .local { font-family:var(--mono); font-size:10px; color:var(--wants); flex:0 0 auto; }
-.diff { flex:1 1 auto; overflow:auto; }
-.diff .hd { position:sticky; top:0; z-index:1; background:var(--panel);
-            border-bottom:1px solid var(--line); padding:7px 10px; display:flex; gap:8px;
-            align-items:center; }
-.diff .hd .name { font-family:var(--mono); font-size:11px; color:var(--t2); overflow:hidden;
-                  text-overflow:ellipsis; white-space:nowrap; }
-.diff .l { white-space:pre; padding:0 10px; font-family:var(--mono); font-size:11.5px;
-           line-height:1.5; }
-.diff .l.add { background:#0d2618; color:#a7f3c0; }
-.diff .l.del { background:#261013; color:#fcaaaa; }
-.diff .l.hunk { background:#131a2b; color:#93b4ff; }
-.diff .l.meta { color:var(--t3); }
-/* One block per file. The name stays put while you scroll that file's hunks, and
-   stops being true the moment the next file's name reaches the top. */
-.diff .dtotal { display:flex; gap:10px; padding:9px 10px 8px; font-family:var(--mono);
-                font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--t3); }
-.diff .dtotal .plus, .diff .dtotal .minus { letter-spacing:0; text-transform:none; font-size:11px; }
-.diff .dfile, .diff .dmsg { border-bottom:1px solid var(--line-soft); }
-.diff .dhead { position:sticky; top:0; z-index:1; display:flex; gap:10px; align-items:baseline;
-               padding:8px 10px; background:var(--elev);
-               border-bottom:1px solid var(--line-soft); cursor:pointer;
-               font-family:var(--mono); font-size:11px; color:var(--t2); list-style:none; }
-.diff .dhead::-webkit-details-marker { display:none; }
-.diff .dhead::before { content:"▾"; color:var(--t3); font-size:9px; flex:0 0 auto; }
-.diff .dfile:not([open]) .dhead::before, .diff .dmsg:not([open]) .dhead::before { content:"▸"; }
-.diff .dhead:hover { color:var(--t1); }
-.diff .dhead .n { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
-                  white-space:nowrap; direction:rtl; text-align:left; }
-.diff .dhead .plus { color:#7ee2a8; flex:0 0 auto; }
-.diff .dhead .minus { color:#f79a9a; flex:0 0 auto; }
-.diff .dhead .bin { color:var(--t3); flex:0 0 auto; }
-
-.usage { display:flex; flex-wrap:wrap; gap:10px; padding:12px; border-bottom:1px solid var(--line-soft); }
-.usage .u { flex:1 1 120px; display:grid; gap:2px; padding:9px 11px; border:1px solid var(--line);
-            border-radius:8px; background:var(--elev); }
-.usage .k { font-size:9.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--t3); }
-.usage .v { font-family:var(--mono); font-size:17px; color:var(--t1); }
-.usage .s { font-size:10.5px; color:var(--t3); }
-.snip { margin:0 12px 12px; padding:11px 12px; background:var(--ink); border:1px solid var(--line);
-        border-radius:8px; font-family:var(--mono); font-size:11px; line-height:1.55;
-        color:var(--t2); overflow-x:auto; white-space:pre; }
-
-/* ── sheets ──────────────────────────────────────────────────────────────── */
-.scrim { position:fixed; inset:0; background:#000c; display:none; z-index:9; }
-.scrim.on { display:block; }
-.sheet { position:fixed; z-index:10; display:none; flex-direction:column; left:50%; top:50%;
-         transform:translate(-50%,-50%); width:min(680px,94vw); max-height:min(84vh,780px);
-         background:var(--panel); border:1px solid var(--line); border-radius:12px;
-         box-shadow:0 24px 60px #000a; overflow:hidden; }
-.sheet.on { display:flex; }
-.shead, .sfoot { flex:0 0 auto; display:flex; gap:8px; align-items:center; padding:11px 13px; }
-.shead { border-bottom:1px solid var(--line); }
-.shead strong { font-size:13px; font-weight:600; }
-.sfoot { border-top:1px solid var(--line); }
-.sfoot:empty { display:none; }
-.sbody { flex:1 1 auto; overflow-y:auto; padding:13px; display:grid; gap:10px;
-         align-content:start; }
-.sheet textarea, .sheet input, .sheet select {
-  width:100%; background:var(--ink); color:var(--t1); border:1px solid var(--line);
-  border-radius:var(--r); padding:8px 9px; font:inherit; font-size:13px; }
-.sheet textarea { min-height:92px; resize:vertical; font-family:var(--sans); }
-.sheet textarea:focus, .sheet input:focus, .sheet select:focus {
-  outline:none; border-color:var(--accent); }
-.sheet label { display:grid; gap:5px; font-size:11px; color:var(--t3);
-               letter-spacing:.02em; }
-.note { font-size:11.5px; color:var(--t3); line-height:1.6; }
-.row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
-.spacer { flex:1 1 auto; }
-.srv { border:1px solid var(--line); border-radius:var(--r); padding:9px 10px; display:grid;
-       gap:4px; }
-.srv .nm { display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:12px;
-           font-weight:600; overflow-wrap:anywhere; }
-.srv .scope { font-family:var(--mono); font-size:10px; color:var(--t3); border:1px solid var(--line);
-              border-radius:4px; padding:0 4px; font-weight:400; }
-.srv .dt { font-size:11px; color:var(--t3); overflow-wrap:anywhere; font-family:var(--mono); }
-.srv .dot { width:6px; height:6px; }
-.srv[data-state="ok"] .dot { background:var(--up); }
-.srv[data-state="fail"] .dot { background:var(--danger); }
-.srv[data-state="auth"] .dot { background:var(--wants); }
-.srv[data-state="pending"] .dot { background:var(--idle); }
-.srv .auth { display:grid; gap:6px; justify-items:start; margin-top:2px;
-  padding-top:8px; border-top:1px dashed var(--line); }
-.srv .auth a { font-family:var(--mono); font-size:11px; color:var(--accent);
-  overflow-wrap:anywhere; }
-.logline { display:flex; gap:9px; align-items:baseline; font-family:var(--mono);
-           font-size:11px; line-height:1.65; }
-.logline .t { color:var(--t3); flex:0 0 auto; }
-.logline .m { overflow-wrap:anywhere; color:var(--t2); }
-.logline.bad .m { color:var(--danger); }
-.logline.warn .m { color:var(--wants); }
-.sbody.log { gap:0; font-variant-numeric:tabular-nums; }
-
-/* ── phone / tablet: exactly one surface, one rule ───────────────────────── */
-nav { display:none; }
-@media (max-width:1280px) { main { grid-template-columns:minmax(0,272px) minmax(0,1fr); } }
-@media (max-width:900px) {
-  main { grid-template-columns:1fr; }
-  /* One rule decides what is visible, so two of them can't disagree — which is how
-     the work list and the diff ended up stacked on top of each other.
-     Class selectors, not `main > *`: a class beats an element whatever the order, so
-     the base `.list { display:flex }` was quietly winning against it. */
-  main .side, main .pane, main .changes { display:none; }
-  main[data-surface="work"] .side,
-  main[data-surface="session"] .pane,
-  main[data-surface="changes"] .changes { display:flex; }
-  .keys { display:flex; }
-  nav { display:flex; flex:0 0 auto; border-top:1px solid var(--line); background:var(--panel);
-        padding-bottom:env(safe-area-inset-bottom); }
-  nav button { flex:1; background:none; border:0; color:var(--t3); padding:11px 0 10px;
-               font-size:11px; letter-spacing:.04em; }
-  nav button[aria-current="true"] { color:var(--t1); box-shadow:inset 0 -2px 0 var(--accent); }
-  .sheet { inset:0; width:100%; max-height:100%; border-radius:0; transform:none; left:0; top:0; }
-  .stats span:nth-child(n+3) { display:none; }
-}
-.b.narrow { display:none; }
-@media (max-width:560px) {
-  header { gap:8px; padding:0 10px; }
-  .brand .tool { display:none; }
-  .stats span:nth-child(n+2) { display:none; }
-  .b .lbl { display:none; }
-  .b.wide { display:none; }
-  .b.narrow { display:inline-block; }
-}
-body.full header, body.full .side, body.full .changes, body.full nav { display:none; }
-body.full main { grid-template-columns:1fr; }
-body.full main .pane { display:flex; }
-/* Its own target, with its own edge — it opens a menu while the label beside it
-   switches surface, and nobody can guess that from 10px of chevron. */
-.caret { margin-left:7px; padding:2px 2px 2px 7px; font-size:10px; opacity:.6;
-         border-left:1px solid var(--line); border-radius:3px; }
-.caret:hover { opacity:1; color:var(--accent); background:var(--elev-2); }
-/* A count is data, not an alarm: the same weight as every other number in the row. */
-.b .badge { margin-left:6px; font-family:var(--mono); font-size:10.5px; color:var(--t3); }
-/* Named popover, not menu: ".b.menu" on the trigger button was picking up these
-   rules — position:fixed, display:grid, min-width:230px — and rendering the button
-   as a giant empty box. A modifier and a component must not share a class name. */
-.popover { position:fixed; z-index:30; min-width:230px; padding:5px; border-radius:9px;
-        background:var(--elev); border:1px solid var(--line); box-shadow:0 18px 44px #000b;
-        display:grid; gap:1px; }
-.mrow { display:flex; gap:12px; align-items:baseline; width:100%; padding:7px 9px;
-        background:transparent; border:0; border-radius:6px; cursor:pointer; text-align:left;
-        font-size:12.5px; color:var(--t1); }
-.mrow:hover:not([disabled]) { background:var(--elev-2); }
-.mrow[disabled] { color:var(--t3); cursor:default; }
-.mrow.on { color:var(--accent); }
-.mrow.danger:hover { color:var(--danger); }
-.mrow .ml { flex:1 1 auto; }
-.mrow .mh { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap; }
-.msep { height:1px; background:var(--line); margin:4px 2px; }
-/* A refresh that blanks the screen looks like a crash. This is the only signal. */
-#loading { position:fixed; top:0; left:0; height:2px; width:0; background:var(--accent);
-           opacity:0; transition:width .25s ease, opacity .2s; z-index:40; }
-#loading.on { opacity:1; }
-.stale { position:fixed; z-index:50; left:50%; transform:translateX(-50%); top:10px;
-         display:flex; gap:12px; align-items:center; padding:9px 12px; border-radius:var(--r);
-         background:var(--elev-2); border:1px solid #37436b; color:var(--t1);
-         font-size:12.5px; box-shadow:0 14px 34px #000b; }
-.toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); z-index:20;
-         display:none; max-width:min(90vw,52ch); padding:9px 13px; border-radius:var(--r);
-         background:var(--elev-2); border:1px solid #5c452b; color:var(--wants);
-         font-size:12.5px; box-shadow:0 12px 30px #000a; }
-.toast.on { display:block; }
-</style>
+<!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
+     hash of the contents, which is what makes it safe to cache forever. -->
+<link rel="stylesheet" href="/app.37826e60.css">
 
 <div id="loading"></div>
 <header>
@@ -833,7 +440,7 @@ function cmpId(a, b) {
 let AUTO = null;                       // don't try to auto-start the same work twice
 function showWork(mayStart) {
   const s = sessionFor(SEL);
-  if (s) { if (s.id !== ACTIVE) open(s.id); return; }
+  if (s) { if (s.id !== ACTIVE) showPane(s.id); return; }
   ACTIVE = null;
   renderBar();
   const w = selected();
@@ -915,7 +522,7 @@ function tabs(active) {
   const sh = el("button", null, "Shell");
   const openShell = mine.find(s => s.kind === "shell");
   sh.setAttribute("aria-current", (active === "session" && openShell && openShell.id === ACTIVE) ? "true" : "false");
-  sh.onclick = () => openShell ? open(openShell.id) : start("shell");
+  sh.onclick = () => openShell ? showPane(openShell.id) : start("shell");
   seg.append(sh);
 
   // Git *is* the changes surface. They were two controls for one idea: a tab that
@@ -944,9 +551,10 @@ function menu(anchor, items) {
   const m = el("div", "popover");
   for (const it of items) {
     if (it.sep) { m.append(el("div", "msep")); continue; }
-    // A row that goes somewhere is an anchor, not a button calling window.open. A popup
-    // blocker will drop the second one without a word — which is what "clicking the pull
-    // request does nothing" was — and an anchor is also middle-clickable and copyable.
+    // A row that goes somewhere is an anchor, not a button calling window.open: it is
+    // middle-clickable, copyable, and shows where it goes. It was blamed on a popup
+    // blocker at the time; the real reason "clicking the pull request does nothing" was
+    // window.open being shadowed by this page's own open() — see showPane.
     const row = el(it.href ? "a" : "button",
                    "mrow" + (it.danger ? " danger" : "") + (it.on ? " on" : "") +
                    (it.wants ? " wants" : "") + (it.disabled ? " off" : ""));
@@ -992,7 +600,7 @@ function sessionMenu(anchor, w, mine) {
       hint: sessionWaiting(s, w) ? "needs you" : (s.id === ACTIVE ? "open" : ""),
       wants: sessionWaiting(s, w),
       on: s.id === ACTIVE,
-      go: () => open(s.id),
+      go: () => showPane(s.id),
     });
   }
   if (mine.length) items.push({ sep: true });
@@ -1184,7 +792,7 @@ async function start(kind, subject) {
     return;
   }
   await refreshSessions();
-  open(r.id);
+  showPane(r.id);
 }
 
 async function kill(id) {
@@ -1205,10 +813,16 @@ async function kill(id) {
   await refreshSessions();
 }
 
-// open shows a pane, creating it once. Its element is never destroyed and the
+// showPane shows a pane, creating it once. Its element is never destroyed and the
 // Terminal is never re-opened: both of those leave the renderer attached to
 // a node that is no longer in the document, which is a pane that paints nothing.
-async function open(id) {
+//
+// Not called open(). A top-level `function open` becomes window.open, so every
+// window.open() on this page was calling *this* — a clicked link opened a pane whose
+// id was a URL, which killed the terminal you were reading and connected a socket to
+// /api/session/socket/https://…  The pull request that "did nothing" was the same
+// shadowing, and no popup blocker was ever involved.
+async function showPane(id) {
   ACTIVE = id;
   markSeen(SEL);
   markSession(SEL, id);
@@ -1532,7 +1146,11 @@ function wirePane(id, pane) {
 // Preference order for the same picture in several formats.
 const IMAGE_RANK = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-async function pasteImages(items, insert) {
+// pathsOnly is for a destination that is text rather than a live agent — the New work
+// sheet, whose task becomes a command-line argument long before anything is at a
+// prompt. There is nothing there to press ⌃V, so the path is the only thing that can
+// carry the picture, and asking for the clipboard route instead inserted nothing at all.
+async function pasteImages(items, insert, pathsOnly) {
   let files = [];
   for (const item of items || []) {
     if (item.kind === "file" && (item.type || "").startsWith("image/")) {
@@ -1551,10 +1169,14 @@ async function pasteImages(items, insert) {
     files = files.filter(f => f.type === files[0].type);
   }
 
+  // clipboard=0: a destination that wants the path must not have the machine's
+  // clipboard replaced on its way there. Describing a task with a screenshot would
+  // otherwise throw away what you had copied, and the next ⌃V in a terminal would
+  // attach the sheet's picture instead of yours.
   const upload = async (f) => {
     try {
-      return await (await fetch("/api/upload", { method: "POST",
-        headers: { "Content-Type": f.type }, body: f })).json();
+      return await (await fetch("/api/upload" + (pathsOnly ? "?clipboard=0" : ""),
+        { method: "POST", headers: { "Content-Type": f.type }, body: f })).json();
     } catch { return { error: "upload failed" }; }
   };
 
@@ -1562,15 +1184,20 @@ async function pasteImages(items, insert) {
   // The system clipboard holds *one* image and the agent reads it on every ⌃V, so two
   // keystrokes attach the same picture twice — which is what doubled the screenshot.
   // One paste, one keystroke, however many formats the clipboard offered.
-  if (first.clipboard) {
+  if (first.clipboard && !pathsOnly) {
     insert("\x16");
     return true;
   }
-  // No shared clipboard (a remote instance): each image gets its path instead, in
-  // bracketed-paste markers so it arrives as a paste rather than as typing.
+  // Nothing to press ⌃V — a remote instance shares no clipboard, and work being
+  // described doesn't have an agent yet — so each image goes in as its path. A terminal
+  // wants bracketed-paste markers around it, and a trailing space inside them, so it
+  // arrives as a paste and two images don't run into one path.
   for (let i = 0; i < files.length; i++) {
     const r = i === 0 ? first : await upload(files[i]);
-    insert(r.path ? "\x1b[200~" + r.path + "\x1b[201~" : "[" + (r.error || "upload failed") + "]");
+    // A failed upload has no path to insert, and saying so in the text would leave
+    // something to delete in the place that is about to be sent.
+    if (!r.path) { toast(r.error || "that image could not be uploaded"); continue; }
+    insert(pathsOnly ? r.path : "\x1b[200~" + r.path + " \x1b[201~");
   }
   return true;
 }
@@ -1902,13 +1529,30 @@ function projectMenu(anchor) {
     items.push({ sep: true });
   }
   items.push({ label: "＋ Add a repository…", hint: "or run workmux in it", go: addProject });
-  const here = curProject();
-  if (multi() && here.id) {
-    items.push({ label: "Stop serving " + here.name, danger: true,
-                 go: () => removeProject(here) });
+  // Any of them, not just the one you happen to be looking at. Offering only the
+  // current project meant dropping another one first required selecting work inside
+  // it, and a repository whose directory is gone has no work to select. The list is
+  // remembered between runs, so what you don't remove is what you get tomorrow.
+  if (multi()) {
+    items.push({ label: "Stop serving…", hint: "remove a repository",
+                 go: () => stopServingMenu(anchor) });
   }
   menu(anchor, items);
 }
+
+// A second step rather than a row of ✕ buttons: this closes sessions, and the paths
+// are what tell two same-named checkouts apart, so they need the room.
+function stopServingMenu(anchor) {
+  const items = [{ label: "‹ Projects", go: () => projectMenu(anchor) }, { sep: true }];
+  for (const p of projects()) {
+    items.push({ label: "Stop serving " + p.name, hint: tilde(p.root),
+                 danger: true, go: () => removeProject(p) });
+  }
+  menu(anchor, items);
+}
+
+// Paths in the UI are read, not copied: $HOME is noise in every one of them.
+const tilde = (path) => (path || "").replace(/^\/(Users|home)\/[^/]+\//, "~/");
 
 // Adding one from the page is the same call `workmux` makes from another checkout,
 // so there is one way a project arrives and not two.
@@ -1943,8 +1587,13 @@ async function removeProject(p) {
       body: JSON.stringify({ id: p.id, remove: true }) })).json();
   } catch { r = { error: "server unreachable" }; }
   if (r.error) { toast(r.error); return; }
-  toast("Stopped serving " + p.name);
+  toast("Stopped serving " + p.name +
+        (r.closed ? " · " + r.closed + " session" + (r.closed === 1 ? "" : "s") + " closed" : ""));
+  // Gone from the page now rather than at the next poll: what is left on screen
+  // otherwise is a list of work in a repository this server no longer holds, and one
+  // of those rows may be the one that is selected.
   setOnly(null);
+  await poll(true);
 }
 
 // ---- sheets: new work, mcp, the log ----
@@ -2078,7 +1727,8 @@ function renderNew() {
   }
   // No branch name asked for: it comes from what you wrote. Needing to invent one
   // before starting is exactly the friction that stops people branching.
-  const task = el("label", null, "What needs doing? The branch name comes from this.");
+  const task = el("label", null,
+    "What needs doing? The branch name comes from this — paste a screenshot in too.");
   const ta = el("textarea");
   ta.placeholder = "e.g. hotel search times out on long stays";
   task.append(ta);
@@ -2092,21 +1742,32 @@ function renderNew() {
     "It branches off the remote, copies the gitignored files a worktree needs, starts an agent, "
     + "and starts no containers — attach a stack later if the change turns out to need one.");
   body.append(task, nameLbl, baseLbl, note);
-  // A pasted screenshot belongs here too: it's the same "here's what's wrong".
-  ta.addEventListener("paste", (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    if ([...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) {
-      e.preventDefault();
-      pasteImages(items, (t) => {
-        const at = ta.selectionStart || ta.value.length;
-        ta.value = ta.value.slice(0, at) + t.replace(/\x1b\[20[01]~|\x16/g, "") + ta.value.slice(at);
-      });
-    }
-  });
 
   const go = el("button", "b on", "Create");
   const status = el("span", "meta", "");
+  // A pasted screenshot belongs here too: it's the same "here's what's wrong". The
+  // task text is what the agent is started with, so the image goes in as a path —
+  // there is no session yet whose clipboard could hold it.
+  ta.addEventListener("paste", (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    if (![...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) return;
+    e.preventDefault();
+    // An upload is a round trip, and a textarea that does nothing for a second reads
+    // as the paste having been swallowed — which is exactly what used to happen.
+    status.textContent = "uploading the image…";
+    pasteImages(items, (path) => {
+      const at = ta.selectionStart ?? ta.value.length;
+      const before = ta.value.slice(0, at), after = ta.value.slice(at);
+      const text = (before && !/\s$/.test(before) ? " " : "") + path
+                 + (after && !/\s/.test(after[0]) ? " " : "");
+      ta.value = before + text + after;
+      // Leave the caret after the path, or a second paste lands in front of the first
+      // and the two come out in the wrong order.
+      ta.setSelectionRange(at + text.length, at + text.length);
+    }, true).finally(() => { status.textContent = ""; });
+  });
+
   go.onclick = async () => {
     go.disabled = true; status.textContent = "creating…";
     let r;

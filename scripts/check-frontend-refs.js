@@ -57,6 +57,27 @@ const code = script
   // A template's prose goes, but what is interpolated into it is code and stays.
   .replace(/`(?:[^`\\]|\\.)*`/g, (t) => (t.match(/\$\{[\s\S]*?\}/g) || []).join(";"));
 
+// A top-level declaration is also a property of window, so `function open(id)` *is*
+// window.open from then on. Clicking a link in the terminal called window.open(url) and
+// got this page's pane opener instead: the terminal you were reading vanished, replaced
+// by a pane whose id was a URL. It was diagnosed as a popup blocker twice. Names at
+// column 0 are the top-level ones in this file.
+const WINDOW_NAMES = new Set(["open", "close", "closed", "name", "status", "length",
+  "top", "self", "parent", "opener", "frames", "focus", "blur", "print", "stop", "find",
+  "scroll", "scrollTo", "scrollBy", "alert", "confirm", "prompt", "event", "origin",
+  "location", "history", "navigator", "screen", "postMessage", "getSelection",
+  "matchMedia", "onerror", "onload"]);
+const shadowed = [];
+for (const m of script.matchAll(
+    /^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)|^(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm)) {
+  const name = m[1] || m[2];
+  if (WINDOW_NAMES.has(name)) shadowed.push([name, script.slice(0, m.index).split("\n").length]);
+}
+for (const [name, line] of shadowed) {
+  console.error(`${path}: top-level ${name}() shadows window.${name} ` +
+                `(script line ${line}) — rename it`);
+}
+
 const missing = new Map();
 for (const m of code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
   const name = m[1];
@@ -68,10 +89,11 @@ for (const m of code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
   const line = script.slice(0, m.index).split("\n").length;
   if (!missing.has(name)) missing.set(name, line);
 }
-if (missing.size) {
-  for (const [name, line] of missing) {
-    console.error(`${path}: calls ${name}() which is never defined (script line ${line})`);
-  }
+for (const [name, line] of missing) {
+  console.error(`${path}: calls ${name}() which is never defined (script line ${line})`);
+}
+if (missing.size || shadowed.length) {
   process.exit(1);
 }
-console.log(`${path}: ${defined.size} top-level names, every call resolves`);
+console.log(`${path}: ${defined.size} top-level names, every call resolves, ` +
+            `none shadow window`);
