@@ -306,8 +306,18 @@
   .strip:hover .rowmenu,
   .strip .rowmenu:focus-visible,
   .strip[aria-selected="true"] .rowmenu { @apply opacity-100 }
-  .strip:hover .seen,
-  .strip[aria-selected="true"] .seen { @apply pr-24 }
+  /* Room for that button whether or not it is showing. Reserving it on hover meant the
+     name rewrapped under the pointer and every row below it moved. */
+  .strip .head { @apply pr-24 }
+
+  /* Working, waiting on you, or neither: one dot, always in the same place. */
+  .strip .state { @apply size-6 flex-none self-center rounded-[50%] bg-rail-idle }
+  .strip .state.wants { @apply bg-wants }
+  .strip .state.live { @apply bg-live }
+  @media (prefers-reduced-motion: no-preference) {
+    .strip .state.live { @apply animate-breathe }
+  }
+  .strip .state.off { @apply bg-none inset-ring-1 inset-ring-line }
 
   /* ── chips: state as a badge, not a floating word ────────────────────────── */
   .strip .chips { @apply mt-1 flex flex-wrap items-center gap-x-5 gap-y-4 }

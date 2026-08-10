@@ -476,6 +476,11 @@ func (b *Builder) SlotFor(cwd string) string {
 	return ""
 }
 
+// NextSlot is the slot a new stack would take, for starting one where nothing runs yet.
+func (b *Builder) NextSlot() string {
+	return stack.NextFreeSlot(b.Cfg, stack.Running(b.Cfg))
+}
+
 // AgentFor is this worktree's agent, for resume: the one that most wants
 // attention, which is the same order the list uses.
 func (b *Builder) AgentFor(cwd string) (string, bool) {

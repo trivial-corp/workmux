@@ -140,6 +140,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/p/{project}/changes", s.scoped(handleChanges))
 	mux.HandleFunc("/api/p/{project}/diff", s.scoped(handleDiff))
 	mux.HandleFunc("/api/p/{project}/stacks", s.scoped(handleStacks))
+	mux.HandleFunc("/api/p/{project}/stacks/other", s.scoped(handleStackOther))
 	mux.HandleFunc("/api/p/{project}/mcp", s.scoped(handleMCPList))
 	mux.HandleFunc("/api/p/{project}/new", s.scoped(handleNewWork))
 	mux.HandleFunc("/api/p/{project}/stack", s.scoped(handleStack))

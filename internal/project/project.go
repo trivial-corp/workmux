@@ -82,7 +82,7 @@ func (p *Project) Root() string { return p.Cfg.Root }
 // Spec turns "a session of this kind, here" into something runnable, and stamps it
 // with the project so a session always knows which repository it belongs to.
 func (p *Project) Spec(kind term.Kind, cwd, agentID string) (term.Spec, error) {
-	d := presets.Deps{Cfg: p.Cfg, SlotFor: p.Builder.SlotFor}
+	d := presets.Deps{Cfg: p.Cfg, SlotFor: p.Builder.SlotFor, NextSlot: p.Builder.NextSlot}
 	spec, err := d.Spec(kind, cwd, agentID)
 	spec.Project = p.ID
 	return spec, err

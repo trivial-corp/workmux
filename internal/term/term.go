@@ -35,6 +35,7 @@ const (
 	KindAttach Kind = "attach" // take over an agent that's already running
 	KindLogs   Kind = "logs"   // tail this work's containers
 	KindGit    Kind = "git"    // a git TUI, for people who want one
+	KindStack  Kind = "stack"  // bring this work's containers up, down or round again
 	// KindMCPAuth finishes an OAuth round that needs the redirect URL pasted back.
 	// It's a session rather than a background call because the paste is the point:
 	// the CLI holds the PKCE verifier, so whatever prints the URL must be the same

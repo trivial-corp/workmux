@@ -18,6 +18,10 @@ import (
 
 // Deps is what presets need to answer.
 type Deps struct {
+	// NextSlot is the slot a stack would take if it started now. Only "up" needs it,
+	// and only when this worktree has nothing running yet.
+	NextSlot func() string
+
 	Cfg *config.Config
 	// SlotFor names the stack running in a worktree, "" when none is.
 	SlotFor func(cwd string) string
@@ -67,6 +71,45 @@ func (d Deps) Spec(kind term.Kind, cwd, subject string) (term.Spec, error) {
 		base.Command = cmd
 		return base, nil
 
+	case term.KindStack:
+		// Starting an app is a build: minutes of output, and the only interesting part
+		// is the reason it stopped. It used to run as a request — a toast, a silent
+		// wait, and the output thrown away — so a failure was indistinguishable from a
+		// slow success. It is a session now, and you watch it.
+		action := subject
+		switch action {
+		case "up", "restart", "stop":
+		default:
+			return base, errors.New("unknown stack action")
+		}
+		slot := ""
+		if d.SlotFor != nil {
+			slot = d.SlotFor(cwd)
+		}
+		if slot == "" && action == "up" && d.NextSlot != nil {
+			slot = d.NextSlot()
+		}
+		if slot == "" {
+			return base, errors.New("nothing is running here to " + action)
+		}
+		cmd := d.Cfg.StackCmd(action, slot, cwd, "")
+		if cmd == "" {
+			return base, errors.New("this project has no " + action + " command")
+		}
+		base.Title = action + " " + slot
+		// The exit status, in words, on the last line. Compose says plenty when it
+		// fails and nothing at all when it succeeds, and "did that work" should not be
+		// a question you have to read a hundred lines to answer.
+		//
+		// One command, quoted, because the session runs `exec <command>` — and
+		// `exec (…); s=$?` execs the subshell and never reaches the rest, which is how
+		// this first shipped saying "number expected" instead of anything useful.
+		script := cmd + "; s=$?; echo; " +
+			"if [ $s -eq 0 ]; then echo '" + action + " " + slot + " — done'; " +
+			"else echo '" + action + " " + slot + " — failed, exit '$s; fi"
+		base.Command = "sh -c " + sq(script)
+		return base, nil
+
 	case term.KindGit:
 		// A git TUI beats anything this dashboard would grow for the same job, but
 		// it isn't installed everywhere — so fall back to something readable rather
@@ -100,6 +143,9 @@ func (d Deps) Spec(kind term.Kind, cwd, subject string) (term.Spec, error) {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// sq quotes a script for a shell that will run it as one word.
+func sq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 func short(id string) string {
 	if len(id) > 8 {

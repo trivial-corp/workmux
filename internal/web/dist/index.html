@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.65eb88ab.css">
+<link rel="stylesheet" href="/app.8568ecaa.css">
 
 <div id="loading"></div>
 <header>
@@ -265,13 +265,18 @@ async function poll(userAsked) {
 // Bands make the server's ordering visible. It already sorts by what wants you, but
 // a flat list of identical cards hides that entirely — which is the difference
 // between a list you read and a list you scan.
-const BANDS = [
-  { key:"wants", label:"Wants you",  tone:"wants", has:(w) => w.tempo === "blocked" },
-  { key:"live",  label:"Working",    tone:"live",  has:(w) => w.live || w.tempo === "active" },
-  { key:"up",    label:"App running",tone:"up",    has:(w) => !!w.stack },
-  { key:"rest",  label:"Quiet",      tone:"idle",  has:() => true },
-  { key:"base",  label:"Base checkout", tone:"base", has:() => false },
-];
+// A card's colour, from its own state. This used to be five labelled bands — Wants you,
+// Working, App running, Quiet — and the headings did more sorting than explaining: a
+// piece of work is often two of those at once, so which band it landed in was a rule you
+// had to know rather than something you could read. The order is still the same, which is
+// where the value was; only the headings are gone.
+function toneOf(w) {
+  if (w.is_default) return "base";
+  if (w.tempo === "blocked") return "wants";
+  if (w.live || w.tempo === "active") return "live";
+  if (w.stack) return "up";
+  return "idle";
+}
 
 // What the filter matches: the branch, what the agent last said, its name, the PR
 // numbers, and — once there is more than one repository — which one it is in. All of
@@ -300,23 +305,11 @@ function renderWork() {
                                     el("p", null, String(here.length) + " worktrees are hidden.")));
     return;
   }
-  const taken = new Set();
-  for (const band of BANDS) {
-    const rows = shown.filter(w => {
-      if (taken.has(w.path)) return false;
-      const mine = band.key === "base" ? w.is_default : (!w.is_default && band.has(w));
-      if (mine) taken.add(w.path);
-      return mine;
-    });
-    if (!rows.length) continue;
-    const sec = el("section", "band");
-    sec.dataset.tone = band.tone;
-    const h = el("h2", null, band.label);
-    h.append(el("span", "count", String(rows.length)));
-    sec.append(h);
-    for (const w of rows) sec.append(strip(w, band.tone));
-    list.append(sec);
-  }
+  // One list, in the order the server ranked them: what wants you, then what is working,
+  // then the rest.
+  const sec = el("section", "band");
+  for (const w of shown) sec.append(strip(w, toneOf(w)));
+  list.append(sec);
 }
 
 function strip(w, tone) {
@@ -333,6 +326,15 @@ function strip(w, tone) {
   // merged list has to say which. Filtered to one, the header already has, and
   // repeating it on every row is a word you read forty times and never need.
   if (multi() && !ONLY) head.append(el("span", "pj", projOf(w).name || w.project));
+  // Working, waiting on you, or neither — one dot, always in the same place.
+  if (!w.is_default) {
+    const state = w.tempo === "blocked" ? "wants"
+                : (w.live || w.tempo === "active") ? "live" : "off";
+    const dot = el("i", "state " + state);
+    dot.title = state === "wants" ? "waiting on you"
+              : state === "live" ? "working right now" : "not running";
+    head.append(dot);
+  }
   head.append(el("div", "branch", w.branch));
   const seen = SEEN[w.path];
   if (seen) {
@@ -350,20 +352,23 @@ function strip(w, tone) {
     body.append(el("div", "said", "where you're standing — not a change in flight"));
   }
 
+  // Everything else this card carried — the agent's current name, three PR numbers, both
+  // drift counts — was read once and never again, and forty rows of it is a wall. What
+  // you scan for is "is this one moving", so that is a dot beside the name; the rest is
+  // still here, in the row's tooltip, where it costs nothing to ignore.
   const chips = el("div", "chips");
-  const add = (cls, text, dot) => {
-    const c = el("span", "chip " + cls);
-    if (dot) c.append(el("i", "dot"));
-    c.append(document.createTextNode(text));
+  if (w.stack) {
+    const c = el("span", "chip app");
+    c.append(el("i", "dot"),
+             document.createTextNode(w.stack.slot + " " + w.stack.up + "/" + w.stack.total));
     chips.append(c);
-  };
-  if (w.tempo === "blocked") add("state", "needs you", true);
-  else if (w.live) add("state", agent ? (agent.name || "working") : "working", true);
-  if (w.stack) add("app", w.stack.slot + " " + w.stack.up + "/" + w.stack.total, true);
-  for (const n of (w.prs || []).slice(0, 3)) add("pr", "#" + n);
-  if (w.behind > 0) add("", "⇣" + w.behind);
-  if (w.ahead > 0) add("", "⇡" + w.ahead);
+  }
   if (chips.children.length) body.append(chips);
+  const facts = [];
+  for (const n of (w.prs || []).slice(0, 4)) facts.push("#" + n);
+  if (w.behind > 0) facts.push("⇣" + w.behind + " behind " + w.base);
+  if (w.ahead > 0) facts.push("⇡" + w.ahead + " ahead");
+  if (facts.length) row.title = w.branch + " · " + facts.join(" · ");
 
   row.append(body);
   // Dropping is the one thing here that destroys something, so it lives behind a
@@ -522,7 +527,10 @@ function tabs(active) {
   // The tab is named after the session you are in, not numbered. "Session 3" is an
   // ordinal for something that has a name, and with two agents running it told you
   // nothing about which one you were looking at — or which was waiting on you.
-  const cur = mine.find(s => s.id === ACTIVE);
+  // Among all of this work's sessions, not only the live ones: a stack action finishes
+  // in seconds, and its pane went back to being called "Session" the moment it did —
+  // while still showing the output you opened it for.
+  const cur = SESSIONS.filter(s => s.cwd === SEL).find(s => s.id === ACTIVE);
   const sess = el("button", null);
   sess.setAttribute("aria-current", active === "session" ? "true" : "false");
   if (cur && sessionWaiting(cur, w)) sess.append(el("i", "dot wants"));
@@ -748,19 +756,16 @@ function sessionWaiting(s, w) {
   return (a ? a.tempo : w.tempo) === "blocked";
 }
 
+// Starting an app is a build: minutes of output, and the only interesting part is why it
+// stopped. As a request it was a toast, a silent wait, and the output discarded — a
+// failure looked exactly like a slow success, which is why neither starting nor stopping
+// seemed to work. It opens a session instead, and you watch it happen.
 async function stackAction(action, w) {
-  const slot = w.stack ? w.stack.slot : (projOf(w).next_slot || "");
-  toast(action === "up" ? "Starting " + slot + "…" : action + "ing " + slot + "…");
-  let r;
-  try {
-    // The path goes to the project that owns it; slots are per-repository too, so
-    // sending this to the wrong one is refused rather than acted on.
-    r = await (await fetch(api("/stack", w.project), { method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, slot, path: w.path || SEL }) })).json();
-  } catch { r = { error: "server unreachable" }; }
-  if (r.error) toast(r.error);
-  else toast(action === "stop" ? slot + " stopped" : slot + " " + (action === "up" ? "started" : "restarted"));
+  if (w && w.path && w.path !== SEL) {
+    SEL = w.path;
+    renderWork();
+  }
+  await start("stack", action);
   poll();
 }
 
@@ -2042,7 +2047,8 @@ function renderMore() {
 // ---- stacks: what is running, and what it costs ----
 
 const gb = (n) => n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + " GB"
-                : n >= 1 << 20 ? Math.round(n / (1 << 20)) + " MB" : (n || 0) + " B";
+                : n >= 1 << 20 ? Math.round(n / (1 << 20)) + " MB"
+                : n >= 1 << 10 ? Math.round(n / (1 << 10)) + " KB" : (n || 0) + " B";
 
 function upFor(epoch) {
   if (!epoch) return "";
@@ -2078,8 +2084,9 @@ async function renderStacks(quiet) {
     if (sub) c.append(el("div", "s", sub));
     sum.append(c);
   };
-  cell("stacks", String(stacks.length),
-       stacks.length ? "of " + (curProject().name || "this repo") : "none running");
+  const mine = stacks.filter(x => x.ours);
+  cell("running", String(stacks.length),
+       mine.length ? mine.length + " of them " + (curProject().name || "this repo") + "'s" : "none of them this repo's");
   cell("cpu", (m.cpu || 0).toFixed(0) + "%", "of one core · " + (m.containers || 0) + " containers");
   cell("memory", gb(m.mem_bytes || 0), m.mem_total ? "of " + gb(m.mem_total) + " docker has" : "");
   if (m.others) cell("not yours", String(m.others), "containers from elsewhere");
@@ -2087,7 +2094,7 @@ async function renderStacks(quiet) {
 
   if (!stacks.length) {
     body.append(el("div", "hollow",
-      el("h3", null, d.docker ? "No stack of this repo is running." : "Docker isn't answering."),
+      el("h3", null, d.docker ? "Nothing is running." : "Docker isn't answering."),
       el("p", null, d.docker
         ? "Start one from a piece of work — it takes the next free slot" +
           (d.next_slot ? ", which is " + d.next_slot + "." : ".")
@@ -2096,12 +2103,16 @@ async function renderStacks(quiet) {
   }
 
   for (const s of stacks) {
-    const w = WORK.find(x => x.path === s.path);
+    const w = s.ours ? WORK.find(x => x.path === s.path) : null;
     const card = el("div", "srv");
     card.dataset.state = s.up === s.total ? "ok" : "fail";
     const nm = el("div", "nm");
     nm.append(el("i", "dot"), document.createTextNode(s.slot));
+    // Whose it is. The containers an app depends on are usually a second compose
+    // project that matches no slot pattern, and while they were hidden here they were
+    // often the reason the app wouldn't come up.
     if (w) nm.append(el("span", "scope", w.branch));
+    else if (!s.ours) nm.append(el("span", "scope", "not this repo"));
     card.append(nm);
     card.append(el("div", "dt",
       [s.up + "/" + s.total + " up", (s.cpu || 0).toFixed(0) + "% cpu",
@@ -2121,15 +2132,42 @@ async function renderStacks(quiet) {
       b.onclick = fn;
       row.append(b);
     };
-    const on = w || { stack: s, project: where.id, path: s.path };
-    act("Restart", async () => { await stackAction("restart", on); renderStacks(true); });
-    act("Stop", async () => { await stackAction("stop", on); renderStacks(true); },
-        "Frees the slot and the memory it is holding");
-    if (w) act("Go to work", () => {
-      closeSheet();
-      if (ONLY && ONLY !== w.project) setOnly(w.project);
-      SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
-    });
+    if (s.ours) {
+      // Ours run as sessions: a restart is a build, and you want to see it.
+      const on = w || { stack: s, project: where.id, path: s.path };
+      act("Logs", () => { closeSheet(); if (w) SEL = w.path; renderWork(); start("logs"); });
+      act("Restart", () => { closeSheet(); stackAction("restart", on); });
+      act("Stop", () => { closeSheet(); stackAction("stop", on); },
+          "Frees the slot and the memory it is holding");
+      if (w) act("Go to work", () => {
+        closeSheet();
+        if (ONLY && ONLY !== w.project) setOnly(w.project);
+        SEL = w.path; markSeen(w.path); renderWork(); showWork(true);
+      });
+    } else {
+      // Someone else's: no build to watch, so it answers here.
+      const other = async (action, b) => {
+        b.disabled = true;
+        let r;
+        try {
+          r = await (await fetch(api("/stacks/other", where.id), { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: s.slot, action }) })).json();
+        } catch { r = { error: "server unreachable" }; }
+        b.disabled = false;
+        toast(r.error ? r.error : s.slot + " " + (action === "stop" ? "stopped" : "restarted"));
+        renderStacks(true);
+      };
+      for (const [label, action, title] of [
+        ["Restart", "restart", ""],
+        ["Stop", "stop", "Frees the memory it is holding"],
+      ]) {
+        const b = el("button", "b", label);
+        if (title) b.title = title;
+        b.onclick = () => other(action, b);
+        row.append(b);
+      }
+    }
     card.append(row);
     body.append(card);
   }

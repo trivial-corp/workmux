@@ -102,16 +102,22 @@ func readStats(cfg *config.Config) (map[string]Usage, Machine) {
 		mach.MemBytes += mem
 		mach.Containers++
 
-		slot := project[row.ID]
-		if slot == "" || !cfg.IsSlot(slot) {
+		name := project[row.ID]
+		if name == "" {
 			mach.Others++
 			continue
 		}
-		u := bySlot[slot]
+		// Keyed by compose project, ours or not. Counting only our own slots left every
+		// other project in the panel reading 0% and 0 B — which is exactly the claim
+		// the panel exists to disprove.
+		if !cfg.IsSlot(name) {
+			mach.Others++
+		}
+		u := bySlot[name]
 		u.CPU += cpu
 		u.MemBytes += mem
 		u.Containers++
-		bySlot[slot] = u
+		bySlot[name] = u
 	}
 	mach.MemTotal = memTotal()
 	return bySlot, mach
