@@ -58,7 +58,7 @@ func ReadNamed(p Foreign) State {
 		return State{Services: []Service{}}
 	}
 	res := run.Cmd(p.Dir, 15*time.Second, "docker", "compose", "-p", p.Name,
-		"-f", p.ConfigFile, "ps", "--all", "--format", "json")
+		"ps", "--all", "--format", "json")
 	if !res.OK() {
 		return State{Services: []Service{}}
 	}
@@ -80,10 +80,9 @@ func Do(p Foreign, action string) (string, error) {
 	default:
 		return "", errString("unknown action")
 	}
-	if p.ConfigFile == "" {
-		return "", errString("docker didn't say which compose file " + p.Name + " came from")
-	}
-	argv := append([]string{"docker", "compose", "-p", p.Name, "-f", p.ConfigFile}, args...)
+	// By name. The file docker reported is a path in some worktree, and it has usually
+	// moved on from what these containers were built from.
+	argv := append([]string{"docker", "compose", "-p", p.Name}, args...)
 	res := run.Cmd(p.Dir, 5*time.Minute, argv...)
 	if !res.OK() {
 		return res.Out, errString(res.LastLine(action + " failed"))

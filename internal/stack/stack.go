@@ -80,8 +80,11 @@ var createdAt = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d
 
 // Read reports one stack's services and how long it has been up.
 func Read(p Project, cfg *config.Config) State {
+	// By name, not by file: the compose file in this worktree drifts from the one the
+	// containers were created with, and `ps -f <drifted file>` lists nothing at all —
+	// which read here as a stack with no services rather than one it couldn't see.
 	res := run.Cmd(p.Dir, 15*time.Second, "docker", "compose", "-p", p.Slot,
-		"-f", p.ConfigFile, "ps", "--all", "--format", "json")
+		"ps", "--all", "--format", "json")
 	if !res.OK() {
 		return State{Services: []Service{}}
 	}

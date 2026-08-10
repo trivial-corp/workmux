@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -376,6 +377,32 @@ func TestSlotURLWithoutN(t *testing.T) {
 	} {
 		if got := c.StackURL(slot); got != want {
 			t.Errorf("StackURL(%q) = %q, want %q", slot, got, want)
+		}
+	}
+}
+
+// Only `up` may name a compose file.
+//
+// Every other action is run from whichever worktree you are looking at, and that file
+// drifts from the one the containers were built with — a branch renames a service and
+// compose then acts on the model in the file instead of on what is running. Measured
+// against a real stack: `-p trip1 -f compose.yaml down --remove-orphans` removed nothing
+// and exited 0, and `ps` with the same -f listed no services at all. Stopping an app
+// looked like it did nothing, because it did nothing.
+func TestOnlyUpNamesTheComposeFile(t *testing.T) {
+	for action, cmd := range defaultCommands {
+		names := strings.Contains(cmd, "{compose}")
+		if action == "up" {
+			if !names {
+				t.Errorf("up has to name the file — it is creating the containers: %q", cmd)
+			}
+			continue
+		}
+		if names {
+			t.Errorf("%s must address the project by name, not by file: %q", action, cmd)
+		}
+		if !strings.Contains(cmd, "-p {slot}") {
+			t.Errorf("%s has nothing to address the project with: %q", action, cmd)
 		}
 	}
 }

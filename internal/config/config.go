@@ -22,11 +22,19 @@ var composeNames = []string{"compose.yaml", "compose.yml", "docker-compose.yml",
 
 // defaultCommands keep a project with no wrapper script working: {slot},
 // {compose}, {profiles}, {path} and {base} are substituted at call time.
+//
+// Only `up` names the compose file. Everything else addresses the project by name,
+// because the file it is run against is whichever worktree you happen to be in, and that
+// file drifts from the one the containers were built from — a branch renames a service,
+// and compose then acts on the model in the file rather than on what is running. Measured
+// against a real stack: `-p trip1 -f compose.yaml down --remove-orphans` removed nothing
+// and exited 0, `ps` listed no services at all, and dropping the -f did both correctly.
+// That is why stopping an app appeared to do nothing at all.
 var defaultCommands = map[string]string{
 	"up":      "docker compose -p {slot} -f {compose} up -d --build",
-	"restart": "docker compose -p {slot} -f {compose} restart",
-	"stop":    "docker compose -p {slot} -f {compose} down --remove-orphans",
-	"logs":    "docker compose -p {slot} -f {compose} logs -f --tail 200 --no-color",
+	"restart": "docker compose -p {slot} restart",
+	"stop":    "docker compose -p {slot} down --remove-orphans",
+	"logs":    "docker compose -p {slot} logs -f --tail 200 --no-color",
 }
 
 // agentPresets is the only place a command name implies more than itself.

@@ -311,7 +311,9 @@
   .strip .head { @apply pr-24 }
 
   /* Working, waiting on you, or neither: one dot, always in the same place. */
-  .strip .state { @apply size-6 flex-none self-center rounded-[50%] bg-rail-idle }
+  /* On the first line, not the middle of the row: a name that wraps to two lines left
+     the dot floating between them. */
+  .strip .state { @apply size-6 flex-none self-start rounded-[50%] bg-rail-idle; margin-top: 0.42em }
   .strip .state.wants { @apply bg-wants }
   .strip .state.live { @apply bg-live }
   @media (prefers-reduced-motion: no-preference) {

@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.8568ecaa.css">
+<link rel="stylesheet" href="/app.948a8421.css">
 
 <div id="loading"></div>
 <header>
@@ -325,16 +325,14 @@ function strip(w, tone) {
   // Branch names repeat across repositories — every one of them has a main — so a
   // merged list has to say which. Filtered to one, the header already has, and
   // repeating it on every row is a word you read forty times and never need.
-  if (multi() && !ONLY) head.append(el("span", "pj", projOf(w).name || w.project));
-  // Working, waiting on you, or neither — one dot, always in the same place.
+  // Working, waiting on you, or neither — one dot, first, so its column is the same
+  // whether or not the row also names a repository.
   if (!w.is_default) {
     const state = w.tempo === "blocked" ? "wants"
                 : (w.live || w.tempo === "active") ? "live" : "off";
-    const dot = el("i", "state " + state);
-    dot.title = state === "wants" ? "waiting on you"
-              : state === "live" ? "working right now" : "not running";
-    head.append(dot);
+    head.append(el("i", "state " + state));
   }
+  if (multi() && !ONLY) head.append(el("span", "pj", projOf(w).name || w.project));
   head.append(el("div", "branch", w.branch));
   const seen = SEEN[w.path];
   if (seen) {
@@ -354,8 +352,10 @@ function strip(w, tone) {
 
   // Everything else this card carried — the agent's current name, three PR numbers, both
   // drift counts — was read once and never again, and forty rows of it is a wall. What
-  // you scan for is "is this one moving", so that is a dot beside the name; the rest is
-  // still here, in the row's tooltip, where it costs nothing to ignore.
+  // you scan for is "is this one moving", so that is a dot beside the name. The numbers
+  // live in the pane the row opens, which has room to lay them out; a native tooltip
+  // was tried in between and is worse than either — a black slab over the list you
+  // cannot style, dismiss or read at a glance.
   const chips = el("div", "chips");
   if (w.stack) {
     const c = el("span", "chip app");
@@ -364,11 +364,7 @@ function strip(w, tone) {
     chips.append(c);
   }
   if (chips.children.length) body.append(chips);
-  const facts = [];
-  for (const n of (w.prs || []).slice(0, 4)) facts.push("#" + n);
-  if (w.behind > 0) facts.push("⇣" + w.behind + " behind " + w.base);
-  if (w.ahead > 0) facts.push("⇡" + w.ahead + " ahead");
-  if (facts.length) row.title = w.branch + " · " + facts.join(" · ");
+
 
   row.append(body);
   // Dropping is the one thing here that destroys something, so it lives behind a
