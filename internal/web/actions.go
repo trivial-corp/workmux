@@ -55,6 +55,26 @@ func handleNewPreview(s *Server, p *project.Project, w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, map[string]string{"branch": p.Runner.PreviewName(req.Name, req.Prompt)})
 }
 
+// handleSetName names a piece of work, or unnames it with an empty string.
+func handleSetName(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if !s.postJSON(w, r, &req) {
+		return
+	}
+	if !p.Owns(req.Path) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a worktree of " + p.Name()})
+		return
+	}
+	if err := p.Runner.SetName(req.Path, req.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // handleStack runs a configured container action.
 func handleStack(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {

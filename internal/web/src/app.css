@@ -203,8 +203,8 @@
   /* Which repo a row belongs to. Only drawn when there is more than one, so a
      single-project server looks exactly as it did. */
   .strip .pj {
-    @apply whitespace-nowrap rounded-full border border-line px-6 py-1 font-mono
-           text-[9.5px] leading-[1.5] text-t3;
+    @apply min-w-0 overflow-hidden rounded-full border border-line px-6 py-1
+           font-mono text-[9.5px] leading-[1.5] text-ellipsis whitespace-nowrap text-t3;
   }
 
   /* ── buttons: one shape, a few weights ─────────────────────────────────────
@@ -290,12 +290,17 @@
     .strip[data-tone="live"] .rail { @apply animate-breathe }
   }
   .strip .body { @apply grid min-w-0 flex-auto gap-4 }
-  .strip .head { @apply flex min-w-0 items-baseline gap-8 }
+  /* The meta line: dot, repository, when you were last here. The title lives on its
+     own line below — they shared one once, and a long repository pill and a long
+     branch fought over it: the pill collapsed and the name ran straight through it. */
+  .strip .head { @apply flex min-w-0 items-center gap-8 }
   .strip .seen { @apply ml-auto flex-none whitespace-nowrap font-mono text-3xs text-t3 }
   .strip .seen.last { @apply text-wants }
-  /* One line, truncated: a name that wrapped pushed its own timestamp around and made
-     every long-named row two rows tall. The tail it hides is in the pane the row opens. */
-  .strip .branch { @apply min-w-0 overflow-hidden font-mono text-md font-semibold text-ellipsis whitespace-nowrap text-t1 }
+  /* One line, truncated: a name that wrapped made every long-named row two rows tall.
+     The tail it hides is in the pane the row opens. */
+  .strip .branch { @apply overflow-hidden font-mono text-md font-semibold text-ellipsis whitespace-nowrap text-t1 }
+  /* A name you typed reads as words, not as a ref. */
+  .strip .branch.named { @apply font-sans }
   .strip[aria-selected="true"] .branch { @apply text-white }
   .strip[data-tone="base"] .branch { @apply font-normal text-t2 }
   .strip .said { @apply overflow-hidden text-ellipsis whitespace-nowrap text-base text-t2 }
@@ -313,9 +318,7 @@
   .strip .head { @apply pr-24 }
 
   /* Working, waiting on you, or neither: one dot, always in the same place. */
-  /* On the first line, not the middle of the row: a name that wraps to two lines left
-     the dot floating between them. */
-  .strip .state { @apply size-6 flex-none self-start rounded-[50%] bg-rail-idle; margin-top: 0.42em }
+  .strip .state { @apply size-6 flex-none rounded-[50%] bg-rail-idle }
   .strip .state.wants { @apply bg-wants }
   .strip .state.live { @apply bg-live }
   @media (prefers-reduced-motion: no-preference) {

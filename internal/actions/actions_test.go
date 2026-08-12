@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/trivial-corp/workmux/internal/config"
+	"github.com/trivial-corp/workmux/internal/gitx"
 	"github.com/trivial-corp/workmux/internal/testrepo"
 )
 
@@ -75,6 +76,47 @@ func TestNewWorkCreatesAWorktreeOffTheRemote(t *testing.T) {
 	}
 	if out.AgentStarting {
 		t.Error("no spawn configured here, so no agent should be claimed")
+	}
+}
+
+// A free-text name becomes both the branch (slugged) and the display name (as
+// typed), and the name can be changed or removed afterwards.
+func TestNewWorkNamesTheWork(t *testing.T) {
+	r := testrepo.New(t, "proj")
+	r.FakeOrigin()
+	run := runner(t, r)
+
+	out, err := run.NewWork("Webhook spam fix", "the intercom webhook lets spam through", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Branch != "webhook-spam-fix" {
+		t.Errorf("branch = %q", out.Branch)
+	}
+	if got := gitx.Names(r.Root)["webhook-spam-fix"]; got != "Webhook spam fix" {
+		t.Errorf("name = %q, want it stored as typed", got)
+	}
+
+	if err := run.SetName(out.Path, "Spam filter"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitx.Names(r.Root)["webhook-spam-fix"]; got != "Spam filter" {
+		t.Errorf("renamed = %q", got)
+	}
+	if err := run.SetName(out.Path, " "); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := gitx.Names(r.Root)["webhook-spam-fix"]; ok {
+		t.Errorf("unnamed, but still %q", got)
+	}
+
+	// A name that is already the slug says nothing the branch doesn't.
+	plain, err := run.NewWork("plain-slug", "whatever this is about", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := gitx.Names(r.Root)[plain.Branch]; ok {
+		t.Errorf("slug-as-name stored anyway: %q", got)
 	}
 }
 

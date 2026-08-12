@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.7e8f5f87.css">
+<link rel="stylesheet" href="/app.ddc1d1d5.css">
 
 <div id="loading"></div>
 <header>
@@ -176,7 +176,7 @@ function signature(d) {
   return JSON.stringify([
     ONLY, d.terminal,
     (d.projects || []).map(p => [p.id, p.name, p.base, p.next_slot, p.stack_enabled]),
-    (d.work || []).map(w => [w.project, w.path, w.branch, w.tempo, w.live, w.behind, w.ahead,
+    (d.work || []).map(w => [w.project, w.path, w.branch, w.name, w.tempo, w.live, w.behind, w.ahead,
       w.prs, w.stack && [w.stack.slot, w.stack.up, w.stack.total],
       (w.agents || []).map(a => [a.id, a.name, a.tempo, a.detail]),
       (w.sessions || []).map(s => [s.id, s.alive])]),
@@ -273,12 +273,12 @@ function toneOf(w) {
   return "idle";
 }
 
-// What the filter matches: the branch, what the agent last said, its name, the PR
-// numbers, and — once there is more than one repository — which one it is in. All of
-// them are things you'd type looking for a piece of work.
+// What the filter matches: the name you gave it, the branch, what the agent last
+// said, its name, the PR numbers, and — once there is more than one repository —
+// which one it is in. All of them are things you'd type looking for a piece of work.
 function matches(w, q) {
   if (!q) return true;
-  const hay = [w.branch, w.base, (w.agents || []).map(a => (a.name || "") + " " + (a.detail || "")).join(" "),
+  const hay = [w.name || "", w.branch, w.base, (w.agents || []).map(a => (a.name || "") + " " + (a.detail || "")).join(" "),
                (w.prs || []).map(n => "#" + n).join(" "), w.stack ? w.stack.slot : "",
                projOf(w).name || w.project].join(" ").toLowerCase();
   // Every word has to appear, so a second word narrows instead of widening.
@@ -313,13 +313,11 @@ function strip(w, tone) {
   row.setAttribute("aria-selected", w.path === SEL ? "true" : "false");
   row.append(el("i", "rail"));
   const body = el("div", "body");
-  // The branch is the only name here that holds still. Everything else on this card is
-  // the agent talking about itself, and it renames itself as the work moves — which is
-  // no way to find the one you were in an hour ago. So the card also says when that was.
+  // A meta line — state dot, which repository, when you were last here — and the
+  // title on a full-width line of its own underneath. They shared one line once,
+  // and a long repository name and a long branch fought over it: the pill
+  // collapsed and the title ran straight through it.
   const head = el("div", "head");
-  // Branch names repeat across repositories — every one of them has a main — so a
-  // merged list has to say which. Filtered to one, the header already has, and
-  // repeating it on every row is a word you read forty times and never need.
   // Working, waiting on you, or neither — one dot, first, so its column is the same
   // whether or not the row also names a repository.
   if (!w.is_default) {
@@ -327,14 +325,21 @@ function strip(w, tone) {
                 : (w.live || w.tempo === "active") ? "live" : "off";
     head.append(el("i", "state " + state));
   }
+  // Branch names repeat across repositories — every one of them has a main — so a
+  // merged list has to say which. Filtered to one, the header already has, and
+  // repeating it on every row is a word you read forty times and never need.
   if (multi() && !ONLY) head.append(el("span", "pj", projOf(w).name || w.project));
-  head.append(el("div", "branch", w.branch));
   const seen = SEEN[w.path];
   if (seen) {
     const last = w.path === latestSeen();
     head.append(el("span", "seen" + (last ? " last" : ""), last ? "last here" : ago(seen)));
   }
-  body.append(head);
+  if (head.children.length) body.append(head);
+  // The title: what you named it, or the branch — the one label here that holds
+  // still. Everything else on this card is the agent talking about itself, and it
+  // renames itself as the work moves, which is no way to find the one you were in
+  // an hour ago.
+  body.append(el("div", "branch" + (w.name ? " named" : ""), w.name || w.branch));
 
   // What it last said, in its own words. This is the line you actually read.
   const agent = (w.agents || [])[0];
@@ -371,7 +376,10 @@ function strip(w, tone) {
     more.setAttribute("aria-label", "More");
     more.onclick = (e) => {
       e.stopPropagation();
-      menu(more, [{ label: "Drop this work…", danger: true, go: () => askDrop(w) }]);
+      menu(more, [
+        { label: w.name ? "Rename…" : "Name this work…", go: () => askName(w) },
+        { label: "Drop this work…", danger: true, go: () => askDrop(w) },
+      ]);
     };
     row.append(more);
   }
@@ -1645,6 +1653,7 @@ function openSheet(which) {
   $("sheet").classList.add("on");
   $("sbody").className = "sbody";
   if (which === "new") renderNew();
+  if (which === "name") renderName();
   if (which === "drop") renderDrop();
   if (which === "mcp") renderMcp(false);
   if (which === "log") renderLog();
@@ -1656,6 +1665,48 @@ function closeSheet() {
   SHEET = null;
   $("scrim").classList.remove("on");
   $("sheet").classList.remove("on");
+}
+
+// Naming a piece of work: what the card says, exactly as typed, while the branch
+// keeps holding the tree together. Stored as the branch's git description, so
+// it belongs to the repository rather than to this page.
+let NAMING = null;
+
+function askName(w) {
+  NAMING = w;
+  openSheet("name");
+}
+
+function renderName() {
+  const w = NAMING;
+  $("stitle").textContent = "Name this work";
+  const body = $("sbody"), foot = $("sfoot");
+  body.textContent = ""; foot.textContent = "";
+  if (!w) return;
+  const lbl = el("label", null, "What the card should say — the branch stays " + w.branch);
+  const input = el("input");
+  input.value = w.name || "";
+  input.placeholder = w.branch;
+  lbl.append(input);
+  body.append(lbl);
+  const go = el("button", "b on", "Save");
+  const status = el("span", "meta", "");
+  go.onclick = async () => {
+    go.disabled = true;
+    let r;
+    try {
+      r = await (await fetch(api("/name", w.project), { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: w.path, name: input.value }) })).json();
+    } catch { r = { error: "server unreachable" }; }
+    go.disabled = false;
+    if (r.error) { status.textContent = r.error; return; }
+    closeSheet();
+    poll(true);
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
+  foot.append(go, status);
+  setTimeout(() => input.focus(), 30);
 }
 
 // Dropping a piece of work. The sheet is filled from the server's own check, so what
@@ -1768,15 +1819,18 @@ function renderNew() {
     l.append(sel);
     body.append(l);
   }
-  // No branch name asked for: it comes from what you wrote. Needing to invent one
-  // before starting is exactly the friction that stops people branching.
+  // No branch name asked for anywhere: it comes from what you wrote. Needing to
+  // invent one before starting is exactly the friction that stops people branching.
   const task = el("label", null,
-    "What needs doing? The branch name comes from this — paste a screenshot in too.");
+    "What needs doing? Paste a screenshot in too.");
   const ta = el("textarea");
   ta.placeholder = "e.g. hotel search times out on long stays";
   task.append(ta);
-  const nameLbl = el("label", null, "Branch name (optional)");
-  const name = el("input"); name.placeholder = "derived from the task";
+  // The name is what the card in the list says, exactly as typed — the one label
+  // that holds still while the agent renames itself. It also becomes the branch,
+  // slugged. Without one, both derive from the task.
+  const nameLbl = el("label", null, "Name (optional)");
+  const name = el("input"); name.placeholder = "e.g. Webhook spam fix";
   nameLbl.append(name);
   const baseLbl = el("label", null, "Base branch");
   const base = el("input"); base.placeholder = (PROJECTS[target] || {}).base || "main";

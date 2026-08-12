@@ -6,9 +6,8 @@
 // it: most edits never need them, and starting one costs a minute you don't spend
 // unless the change earns it.
 //
-// The list is ordered by what wants you: needs-input first, then working, then
-// whatever has containers up, then the rest, newest first inside each group. With
-// several changes in flight, that ordering *is* the dashboard.
+// The list is ordered by what you touched last, newest first, base checkout at
+// the bottom. With several changes in flight, that ordering *is* the dashboard.
 package work
 
 import (
@@ -58,10 +57,13 @@ type StackRef struct {
 // one server serves several and a merged list is otherwise ambiguous — two repos
 // can easily have a branch of the same name.
 type Item struct {
-	Project   string         `json:"project"`
-	Path      string         `json:"path"`
-	Dir       string         `json:"dir"`
-	Branch    string         `json:"branch"`
+	Project string `json:"project"`
+	Path    string `json:"path"`
+	Dir     string `json:"dir"`
+	Branch  string `json:"branch"`
+	// Name is the human-given name of this work, when it has one — what the card
+	// says while the branch stays a slug. From the branch's git description.
+	Name      string         `json:"name"`
 	IsDefault bool           `json:"is_default"`
 	PR        *PRRef         `json:"pr"`
 	PRs       []int          `json:"prs"`
@@ -152,6 +154,7 @@ func (b *Builder) Build() View {
 	}
 
 	byBranch, openPRs := prs.Data(root)
+	names := gitx.Names(root)
 	known := map[int]bool{}
 	for _, p := range byBranch {
 		known[p.Number] = true
@@ -259,7 +262,7 @@ func (b *Builder) Build() View {
 
 		items = append(items, Item{
 			Project: b.ID,
-			Path:    w.Path, Dir: w.Dir, Branch: branch,
+			Path:    w.Path, Dir: w.Dir, Branch: branch, Name: names[w.Branch],
 			IsDefault: w.Path == root,
 			PR:        pr, PRs: prNums, Base: itemBase,
 			Activity: lastActivity(w.Path, mine), Live: live,

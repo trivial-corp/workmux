@@ -74,6 +74,24 @@ func Worktrees(root string) []Worktree {
 	return out
 }
 
+// Names reads every branch's description in one call — workmux stores the
+// human-given name of a piece of work there, so it lives with the repository
+// and git's own tooling (`git branch --edit-description`) sees the same thing.
+func Names(root string) map[string]string {
+	res := run.Git(root, 8*time.Second, "config", "--get-regexp", `^branch\..+\.description$`)
+	out := map[string]string{}
+	for _, ln := range res.Lines() {
+		// A multi-line description continues on lines without the key; only the
+		// first line is a name.
+		key, val, ok := strings.Cut(ln, " ")
+		if !ok || !strings.HasPrefix(key, "branch.") || !strings.HasSuffix(key, ".description") {
+			continue
+		}
+		out[strings.TrimSuffix(strings.TrimPrefix(key, "branch."), ".description")] = val
+	}
+	return out
+}
+
 var (
 	baseOnce  sync.Mutex
 	baseCache = map[string]string{}

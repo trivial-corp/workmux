@@ -92,6 +92,12 @@ func (r *Runner) NewWork(name, prompt, base string) (*NewWorkResult, error) {
 
 	copied := CopyLocalFiles(r.Cfg, path)
 
+	// The name as typed, when it says more than the slug does, becomes the work's
+	// display name — the card shows "Webhook spam fix", the branch stays a slug.
+	if title := strings.TrimSpace(name); title != "" && title != slug {
+		run.Git(root, 8*time.Second, "config", "branch."+slug+".description", title)
+	}
+
 	out := &NewWorkResult{Path: path, Dir: slug, Branch: slug, Base: base, Copied: copied}
 	// Start the agent behind the response. Waiting on it held the request for as
 	// long as the agent took to boot, and if it ever hangs the button just sits
@@ -132,6 +138,26 @@ func (r *Runner) PreviewName(name, prompt string) string {
 		return ""
 	}
 	return slug
+}
+
+// SetName gives a piece of work its display name, or takes it away with an empty
+// one. The branch keeps holding the tree together; this is only what the card
+// says. Stored as the branch's git description at the repository root, so it
+// survives the server and shows up in git's own tooling.
+func (r *Runner) SetName(path, name string) error {
+	res := run.Git(path, 8*time.Second, "rev-parse", "--abbrev-ref", "HEAD")
+	branch := strings.TrimSpace(res.Out)
+	if !res.OK() || branch == "" || branch == "HEAD" {
+		return errors.New("this worktree isn't on a branch")
+	}
+	key := "branch." + branch + ".description"
+	if name = strings.TrimSpace(name); name == "" {
+		run.Git(r.Cfg.Root, 8*time.Second, "config", "--unset", key)
+	} else if res := run.Git(r.Cfg.Root, 8*time.Second, "config", key, name); !res.OK() {
+		return errors.New(res.LastLine("could not save the name"))
+	}
+	r.invalidate()
+	return nil
 }
 
 // MergeBase brings a worktree level with its base branch.
