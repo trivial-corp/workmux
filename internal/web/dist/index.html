@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.ddc1d1d5.css">
+<link rel="stylesheet" href="/app.c9833509.css">
 
 <div id="loading"></div>
 <header>
@@ -215,23 +215,7 @@ async function poll(userAsked) {
   label.textContent = here;
   if (multi()) label.append(caret());
 
-  const rows = visible();
-  const stats = $("stats");
-  stats.textContent = "";
-  const chip = (t) => stats.append(el("span", null, t));
-  const wants = rows.filter(w => w.tempo === "blocked").length;
-  const live = rows.filter(w => w.live).length;
-  chip(rows.length + " trees");
-  if (wants) chip(wants + " waiting");
-  if (live) chip(live + " working");
-  // A base branch and a next slot belong to one repository. Showing one project's
-  // while looking at all of them would be a number that is quietly about something
-  // else, so with the filter off they simply aren't there.
-  const one = ONLY ? PROJECTS[ONLY] : (multi() ? null : projects()[0]);
-  if (one) {
-    chip(one.base);
-    if (one.stack_enabled) chip("next " + one.next_slot);
-  }
+  renderStats();
   // The page you are looking at keeps running the JS it loaded. After an upgrade or a
   // restart that JS can be older than the server, and then you're debugging a bug that
   // was fixed an hour ago — so say so instead of letting it happen quietly.
@@ -240,6 +224,7 @@ async function poll(userAsked) {
     else if (BUILD !== d.build) staleNotice();
   }
   $("btn-mcp").hidden = !caps().mcp;
+  const rows = visible();
   if (!SEL || !rows.some(w => w.path === SEL)) SEL = (rows[0] || {}).path || null;
   const sig = signature(d);
   const changed = sig !== SIG;
@@ -260,6 +245,43 @@ async function poll(userAsked) {
   // poll never starts one: that's a click's decision, not a timer's.
   if (!ACTIVE) showWork(false);
   if (userAsked) loading(false);
+}
+
+// STATUS narrows the list to what's waiting on you or what's working. The list no
+// longer *sorts* by status, so this is where "show me what wants me" went: the
+// counts in the header are the filter.
+let STATUS = null; // "wants" | "live" | null
+
+function matchesStatus(w) {
+  if (!STATUS) return true;
+  return STATUS === "wants" ? w.tempo === "blocked" : (w.live || w.tempo === "active");
+}
+
+function renderStats() {
+  const rows = visible();
+  const stats = $("stats");
+  stats.textContent = "";
+  const chip = (t, key) => {
+    const s = el("span", key ? "flt" + (STATUS === key ? " on" : "") : null, t);
+    if (key) {
+      s.title = "Show only these";
+      s.onclick = () => { STATUS = STATUS === key ? null : key; renderStats(); renderWork(); };
+    }
+    stats.append(s);
+  };
+  const wants = rows.filter(w => w.tempo === "blocked").length;
+  const live = rows.filter(w => w.live).length;
+  chip(rows.length + " trees");
+  if (wants || STATUS === "wants") chip(wants + " waiting", "wants");
+  if (live || STATUS === "live") chip(live + " working", "live");
+  // A base branch and a next slot belong to one repository. Showing one project's
+  // while looking at all of them would be a number that is quietly about something
+  // else, so with the filter off they simply aren't there.
+  const one = ONLY ? PROJECTS[ONLY] : (multi() ? null : projects()[0]);
+  if (one) {
+    chip(one.base);
+    if (one.stack_enabled) chip("next " + one.next_slot);
+  }
 }
 
 // A card's colour, from its own state. The server orders the list by what you touched
@@ -294,9 +316,13 @@ function renderWork() {
     return;
   }
   const q = FILTER.trim();
-  const shown = here.filter(w => matches(w, q));
+  const shown = here.filter(w => matches(w, q) && matchesStatus(w));
   if (!shown.length) {
-    list.append(el("div", "hollow", el("h3", null, "Nothing matches “" + q + "”."),
+    const head = q ? "Nothing matches “" + q + "”."
+               : STATUS === "wants" ? "Nothing is waiting on you."
+               : STATUS === "live" ? "Nothing is working right now."
+               : "Nothing matches.";
+    list.append(el("div", "hollow", el("h3", null, head),
                                     el("p", null, String(here.length) + " worktrees are hidden.")));
     return;
   }
@@ -328,7 +354,15 @@ function strip(w, tone) {
   // Branch names repeat across repositories — every one of them has a main — so a
   // merged list has to say which. Filtered to one, the header already has, and
   // repeating it on every row is a word you read forty times and never need.
-  if (multi() && !ONLY) head.append(el("span", "pj", projOf(w).name || w.project));
+  // The pill is also the fastest way to *get* filtered: click it. Back out through
+  // the project name in the header.
+  if (multi() && !ONLY) {
+    const pname = projOf(w).name || w.project;
+    const pj = el("button", "pj", pname);
+    pj.title = "Show only " + pname;
+    pj.onclick = (e) => { e.stopPropagation(); setOnly(w.project); };
+    head.append(pj);
+  }
   const seen = SEEN[w.path];
   if (seen) {
     const last = w.path === latestSeen();
@@ -1913,6 +1947,54 @@ function renderNew() {
   setTimeout(() => ta.focus(), 30);
 }
 
+// ---- mcp auto-auth ----
+//
+// Servers you marked: when one turns up unauthenticated, workmux fetches its
+// authorization URL and opens the page itself, from the server side — a page can't
+// open windows without a click, and with thirty connectors whose tokens expire on
+// their own schedule, "click Authenticate thirty times" was the morning routine.
+let MCPAUTO = {};
+const MCPAUTO_KEY = "workmux.mcpauto";
+try { MCPAUTO = JSON.parse(localStorage.getItem(MCPAUTO_KEY) || "{}") || {}; } catch { MCPAUTO = {}; }
+// "\n" because a server name can hold dots, spaces and dashes — but not a newline.
+const autoKey = (project, name) => project + "\n" + name;
+function setMcpAuto(project, name, on) {
+  const k = autoKey(project, name);
+  if (on) MCPAUTO[k] = 1; else delete MCPAUTO[k];
+  try { localStorage.setItem(MCPAUTO_KEY, JSON.stringify(MCPAUTO)); } catch {}
+}
+
+// One page open per server per half hour, and a fresh one once it has been seen
+// healthy again — an expired token must not become a pile of forgotten tabs.
+const KICKED = {};
+async function mcpAutoSweep() {
+  const ids = new Set(Object.keys(MCPAUTO).map(k => k.split("\n")[0]));
+  for (const id of ids) {
+    if (!PROJECTS[id] || !(PROJECTS[id].agent || {}).mcp) continue;
+    let d;
+    try { d = await (await fetch(api("/mcp", id))).json(); } catch { continue; }
+    for (const x of d.servers || []) {
+      const k = autoKey(id, x.name);
+      if (!MCPAUTO[k]) continue;
+      if (x.state === "ok") { delete KICKED[k]; continue; }
+      if (x.state !== "auth") continue;
+      if (KICKED[k] && Date.now() - KICKED[k] < 30 * 60 * 1000) continue;
+      KICKED[k] = Date.now();
+      let r;
+      try {
+        r = await (await fetch(api("/mcp/auth", id), { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: x.name, open: true }) })).json();
+      } catch { continue; }
+      toast(r.error ? x.name + ": " + r.error
+          : r.interactive ? x.name + " needs a terminal to finish authenticating — see the MCP sheet"
+          : "opened the authorization page for " + x.name);
+    }
+  }
+}
+setInterval(mcpAutoSweep, 5 * 60 * 1000);
+setTimeout(mcpAutoSweep, 8000); // after the first poll has told us the projects
+
 async function renderMcp(refresh) {
   const where = curProject();
   $("stitle").textContent = multi() ? "MCP servers · " + (where.name || "") : "MCP servers";
@@ -1931,9 +2013,26 @@ async function renderMcp(refresh) {
   const servers = d.servers || [];
   if (!servers.length) body.append(el("div", "hollow", el("p", null,
     "No MCP servers registered. Add one below — it goes through the agent CLI.")));
+  // Finding one server among thirty is a scroll; a filter is the answer to a long
+  // list here exactly as it is over the work list.
+  const index = [];
+  if (servers.length > 5) {
+    const filt = el("input");
+    filt.type = "search";
+    filt.placeholder = "Filter servers";
+    filt.oninput = () => {
+      const terms = filt.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      for (const { card, hay } of index)
+        card.style.display = terms.every(t => hay.includes(t)) ? "" : "none";
+    };
+    body.append(filt);
+    setTimeout(() => filt.focus(), 30);
+  }
   for (const x of servers) {
     const card = el("div", "srv");
     card.dataset.state = x.state;
+    index.push({ card, hay: [x.name, x.target, x.command, x.detail, x.scope, x.state]
+      .filter(Boolean).join(" ").toLowerCase() });
     const nm = el("div", "nm");
     nm.append(el("i", "dot"), document.createTextNode(x.name));
     if (x.scope) nm.append(el("span", "scope", x.scope));
@@ -1959,6 +2058,16 @@ async function renderMcp(refresh) {
       renderMcp(true);
     };
     row.append(rm);
+    // Opt this server into the sweep above: expired auth reopens its own
+    // authorization page instead of waiting for you to notice the yellow dot.
+    const auto = el("label", "check auto");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = !!MCPAUTO[autoKey(where.id, x.name)];
+    box.onchange = () => { setMcpAuto(where.id, x.name, box.checked); if (box.checked) mcpAutoSweep(); };
+    auto.append(box, document.createTextNode("auto-auth"));
+    auto.title = "Reopen the authorization page automatically whenever this server needs it";
+    row.append(auto);
     card.append(row);
     body.append(card);
   }

@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"os/exec"
 
 	"github.com/trivial-corp/workmux/internal/mcp"
 	"github.com/trivial-corp/workmux/internal/project"
@@ -171,6 +172,10 @@ func handleMCPAdd(s *Server, p *project.Project, w http.ResponseWriter, r *http.
 func handleMCPAuth(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
+		// Open asks this machine to open the page itself — the auto-auth sweep runs
+		// on a timer, and a page can't window.open without a user gesture. Only
+		// meaningful when the browser is where the server is.
+		Open bool `json:"open"`
 	}
 	if !s.postJSON(w, r, &req) {
 		return
@@ -180,8 +185,21 @@ func handleMCPAuth(s *Server, p *project.Project, w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	if req.Open && !start.Interactive {
+		OpenBrowser(start.URL)
+	}
 	Journal.Note("mcp auth %s in %s → %s", req.Name, p.Name(), tail(start.URL, 60))
 	writeJSON(w, http.StatusOK, start)
+}
+
+// OpenBrowser opens url with the OS opener, quietly doing nothing if there is none.
+func OpenBrowser(url string) {
+	for _, opener := range []string{"open", "xdg-open"} {
+		if path, err := exec.LookPath(opener); err == nil {
+			_ = exec.Command(path, url).Start()
+			return
+		}
+	}
 }
 
 func handleMCPRemove(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {

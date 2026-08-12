@@ -789,14 +789,7 @@ func firstLine(s string) string {
 	return s
 }
 
-func openBrowser(url string) {
-	for _, opener := range []string{"open", "xdg-open"} {
-		if path, err := exec.LookPath(opener); err == nil {
-			_ = exec.Command(path, url).Start()
-			return
-		}
-	}
-}
+func openBrowser(url string) { web.OpenBrowser(url) }
 
 // contains reports whether a list holds a value.
 func contains(list []string, want string) bool {

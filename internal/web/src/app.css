@@ -198,13 +198,18 @@
   .brand .tool { @apply text-xs text-t3 }
   .stats { @apply flex flex-auto items-center gap-0 overflow-hidden font-mono text-xs text-t3 }
   .stats span { @apply whitespace-nowrap border-l border-line-soft px-10 first:border-l-0 first:pl-0 }
+  /* The waiting/working counts are also the status filter: click one to see only those. */
+  .stats .flt { @apply cursor-pointer select-none hover:text-t1 }
+  .stats .flt.on { @apply text-accent }
   .acts { @apply flex flex-none gap-6 }
 
   /* Which repo a row belongs to. Only drawn when there is more than one, so a
-     single-project server looks exactly as it did. */
+     single-project server looks exactly as it did. A button, because clicking it
+     is the quick way to filter down to that repository. */
   .strip .pj {
-    @apply min-w-0 overflow-hidden rounded-full border border-line px-6 py-1
-           font-mono text-[9.5px] leading-[1.5] text-ellipsis whitespace-nowrap text-t3;
+    @apply min-w-0 cursor-pointer overflow-hidden rounded-full border border-line
+           bg-transparent px-6 py-1 font-mono text-[9.5px] leading-[1.5] text-ellipsis
+           whitespace-nowrap text-t3 hover:border-edge hover:text-t1;
   }
 
   /* ── buttons: one shape, a few weights ─────────────────────────────────────
@@ -507,6 +512,9 @@
   }
   .srv .dt { @apply font-mono text-xs text-t3 [overflow-wrap:anywhere] }
   .srv .dot { @apply size-6 }
+  /* The auto-auth opt-in, tucked to the card's right, and not in the drop sheet's red. */
+  .srv .check { @apply my-0 ml-auto text-sm text-t3 }
+  .srv .check input { @apply accent-accent }
   .srv[data-state="ok"] .dot { @apply bg-up }
   .srv[data-state="fail"] .dot { @apply bg-danger }
   .srv[data-state="auth"] .dot { @apply bg-wants }
