@@ -1980,6 +1980,22 @@ async function mcpAutoSweep() {
       if (x.state !== "auth") continue;
       if (KICKED[k] && Date.now() - KICKED[k] < 30 * 60 * 1000) continue;
       KICKED[k] = Date.now();
+      // The round runs in a session so its callback stays alive, and the server
+      // opens the page that session prints (see authenticate for the whole story).
+      if ((STATE || {}).terminal) {
+        try {
+          const sess = await (await fetch(api("/session/new", id), { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "mcpauth", cwd: PROJECTS[id].root, agent: x.name,
+                                   cols: 200, rows: 50 }) })).json();
+          toast(sess.error ? x.name + ": " + sess.error
+                           : "finishing authorization for " + x.name + " — approve the page that opens");
+          if (!sess.error) refreshSessions();
+        } catch {}
+        continue;
+      }
+      // No terminals: ask for the URL and open it — enough for connector-style
+      // servers, which authorize wholly on the vendor's side.
       let r;
       try {
         r = await (await fetch(api("/mcp/auth", id), { method: "POST",
@@ -2079,14 +2095,26 @@ async function renderMcp(refresh) {
   foot.append(addBtn, refreshBtn);
 }
 
-// authenticate asks the agent CLI where to authorize, and shows the answer as a link.
+// authenticate finishes the OAuth round in one click.
 //
-// The old version opened an agent session and typed a command into it after a fixed
-// wait. Two things were wrong with that: the socket was usually still connecting, so
-// the keystrokes went nowhere at all, and even when they landed the agent was still
-// starting up. Either way you got an empty session and no explanation. A URL can't
-// race anything — and it works from a phone, which a terminal on this host does not.
+// The CLI holds the PKCE verifier and a localhost callback *inside its process*,
+// so the page that can finish the round is one printed by a process that is still
+// running. Run the whole round in a session: the CLI prints its URL and waits on
+// its callback, and the server opens that page itself (openAuthPage) — approving
+// it lands on a localhost someone is actually listening on. Asking a one-shot
+// probe for the URL instead gave back a link to a callback that had already died
+// with the probe, and by now the probe also *waits*, which turned the button into
+// a sixty-second "asking…".
+//
+// Without terminals there is no process to hold the callback, so fall back to the
+// probe and its link — that still completes for connector-style servers, which
+// authorize wholly on the vendor's side.
 async function authenticate(project, name, card, btn) {
+  if ((STATE || {}).terminal) {
+    closeSheet();
+    await start("mcpauth", name);
+    return;
+  }
   const label = btn.textContent;
   btn.disabled = true;
   btn.textContent = "asking…";
@@ -2112,22 +2140,8 @@ async function authenticate(project, name, card, btn) {
   a.href = d.url;
   a.target = "_blank";
   a.rel = "noopener noreferrer";
-  box.append(a, el("div", "dt", d.url));
-  if (d.interactive) {
-    // The CLI is holding the PKCE verifier and a callback on its own localhost, which
-    // is not reachable from a phone. Finishing means pasting the redirect URL back to
-    // that same process, so it has to be a terminal — and the command *is* the
-    // session, so there is nothing to type at the right moment.
-    box.append(el("div", "dt",
-      "the redirect page will fail if your browser isn't on this machine — that's fine, " +
-      "copy the URL it lands on and paste it into the session below"));
-    const t = el("button", "b", "Finish in a terminal");
-    t.onclick = async () => { closeSheet(); await start("mcpauth", name); };
-    box.append(t);
-  } else {
-    box.append(el("div", "dt",
-      "authorize there, then restart the agent — it picks the connector up on its next start"));
-  }
+  box.append(a, el("div", "dt",
+    "authorize there, then restart the agent — it picks the connector up on its next start"));
   card.append(box);
 }
 

@@ -161,15 +161,14 @@ func (r *Reader) Auth(name string) (AuthStart, error) {
 	}
 	argv := append(strings.Fields(r.Cfg.Agent.MCP), expandName(r.Cfg.Agent.MCPAuth, name)...)
 	res := run.Env(r.Cfg.Root, append(os.Environ(), "PATH="+UserPath()), 60*time.Second, argv...)
-	out := stripANSI(res.Out)
-	m := authURL.FindString(out)
+	m := FindAuthURL(res.Out)
 	if m == "" {
 		return AuthStart{}, errString(res.LastLine("the agent printed no authorization URL"))
 	}
 	// A non-zero exit with a URL already printed is the "finish this in a terminal"
 	// case. Reading that from the exit status rather than the complaint's wording
 	// keeps this working when the wording changes.
-	return AuthStart{URL: strings.TrimRight(m, ".,)"), Interactive: !res.OK()}, nil
+	return AuthStart{URL: m, Interactive: !res.OK()}, nil
 }
 
 // AuthArgv is the same command, for running in a terminal where the paste-back
@@ -395,9 +394,22 @@ func FindExecutable(name string) string {
 	return ""
 }
 
-var ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+var (
+	ansi = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
+	// osc matches Operating System Commands — window titles, and OSC-8 hyperlinks,
+	// whose payload is a second invisible copy of the URL. Stripping only the CSI
+	// colours left that copy glued to the visible one, so "the" URL came out twice
+	// with ]8;; litter in between.
+	osc = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
+)
 
-func stripANSI(s string) string { return ansi.ReplaceAllString(s, "") }
+func stripANSI(s string) string { return osc.ReplaceAllString(ansi.ReplaceAllString(s, ""), "") }
+
+// FindAuthURL pulls the authorization URL out of CLI output, terminal noise and
+// all. Empty when there isn't one.
+func FindAuthURL(out string) string {
+	return strings.TrimRight(authURL.FindString(stripANSI(out)), ".,)")
+}
 
 type errString string
 

@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/trivial-corp/workmux/internal/bg"
+	"github.com/trivial-corp/workmux/internal/mcp"
 	"github.com/trivial-corp/workmux/internal/project"
 	"github.com/trivial-corp/workmux/internal/term"
 )
@@ -100,8 +101,31 @@ func handleSessionNew(s *Server, p *project.Project, w http.ResponseWriter, r *h
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
+	if sess.Kind == term.KindMCPAuth {
+		// The OAuth callback lives inside this session's process, so the page that can
+		// finish the round is the one *it* prints — a URL fetched by an earlier probe
+		// points at a callback that already died with its process. Open it here, on
+		// the machine whose localhost that is, and the redirect just works.
+		go openAuthPage(sess)
+	}
 	Journal.Note("session %s (%s) started in %s", sess.ID, sess.Kind, p.Where(sess.CWD))
 	writeJSON(w, http.StatusOK, sess.Info())
+}
+
+// openAuthPage watches a fresh mcpauth session for the authorization URL the CLI
+// prints, and opens it in the browser once.
+func openAuthPage(sess *term.Session) {
+	for deadline := time.Now().Add(60 * time.Second); time.Now().Before(deadline); {
+		if url := mcp.FindAuthURL(sess.Drain()); url != "" {
+			OpenBrowser(url)
+			Journal.Note("session %s: opened %s", sess.ID, tail(url, 60))
+			return
+		}
+		if sess.Finished() {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func (s *Server) handleSessionKill(w http.ResponseWriter, r *http.Request) {
