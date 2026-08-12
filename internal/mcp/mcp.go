@@ -212,6 +212,15 @@ func (r *Reader) Add(name, target, transport, scope string, env, headers []strin
 	if transport == "http" || transport == "sse" {
 		argv = append(argv, "--transport", transport)
 	}
+	// The CLI's --env and --header take a variadic list, so put before the name
+	// they swallow it and the URL too ("missing required argument 'name'"). The
+	// positionals go first; for a command they can't, so the "--" that starts it
+	// is what stops the list instead.
+	argv = append(argv, name)
+	isURL := strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")
+	if isURL {
+		argv = append(argv, strings.TrimSpace(target))
+	}
 	for _, h := range headers {
 		if strings.Contains(h, ":") {
 			argv = append(argv, "--header", h)
@@ -222,10 +231,7 @@ func (r *Reader) Add(name, target, transport, scope string, env, headers []strin
 			argv = append(argv, "-e", e)
 		}
 	}
-	argv = append(argv, name)
-	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		argv = append(argv, strings.TrimSpace(target))
-	} else {
+	if !isURL {
 		argv = append(argv, "--")
 		argv = append(argv, strings.Fields(target)...)
 	}
