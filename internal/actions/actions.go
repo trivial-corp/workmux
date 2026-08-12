@@ -69,18 +69,9 @@ type NewWorkResult struct {
 
 func (r *Runner) NewWork(name, prompt, base string) (*NewWorkResult, error) {
 	root := r.Cfg.Root
-	// A name is optional: derive one from the task, because nobody should have to
-	// invent a branch name to start working.
-	slug := slugify(name)
-	if slug == "" {
-		slug = slugify(nameFromTask(prompt))
-	}
-	if slug == "" || !nameOK.MatchString(slug) {
-		return nil, errors.New("describe the task, or give it a short name")
-	}
-	slug = uniqueSlug(root, r.Cfg.Worktrees.Path, slug)
-	if slug == "" {
-		return nil, errors.New("couldn't find a free branch name — try different wording")
+	slug, err := r.deriveSlug(name, prompt)
+	if err != nil {
+		return nil, err
 	}
 	if base == "" {
 		base = gitx.DefaultBranch(root)
@@ -114,6 +105,33 @@ func (r *Runner) NewWork(name, prompt, base string) (*NewWorkResult, error) {
 	}
 	r.invalidate()
 	return out, nil
+}
+
+// deriveSlug is the name new work would get. A name is optional: derive one from
+// the task, because nobody should have to invent a branch name to start working.
+func (r *Runner) deriveSlug(name, prompt string) (string, error) {
+	slug := slugify(name)
+	if slug == "" {
+		slug = slugify(nameFromTask(prompt))
+	}
+	if slug == "" || !nameOK.MatchString(slug) {
+		return "", errors.New("describe the task, or give it a short name")
+	}
+	slug = uniqueSlug(r.Cfg.Root, r.Cfg.Worktrees.Path, slug)
+	if slug == "" {
+		return "", errors.New("couldn't find a free branch name — try different wording")
+	}
+	return slug, nil
+}
+
+// PreviewName answers "what would this be called" without creating anything, so
+// the new-work dialog can show the name while you type. Empty means no answer yet.
+func (r *Runner) PreviewName(name, prompt string) string {
+	slug, err := r.deriveSlug(name, prompt)
+	if err != nil {
+		return ""
+	}
+	return slug
 }
 
 // MergeBase brings a worktree level with its base branch.

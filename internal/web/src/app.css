@@ -293,7 +293,9 @@
   .strip .head { @apply flex min-w-0 items-baseline gap-8 }
   .strip .seen { @apply ml-auto flex-none whitespace-nowrap font-mono text-3xs text-t3 }
   .strip .seen.last { @apply text-wants }
-  .strip .branch { @apply min-w-0 font-mono text-md font-semibold text-t1 [overflow-wrap:anywhere] }
+  /* One line, truncated: a name that wrapped pushed its own timestamp around and made
+     every long-named row two rows tall. The tail it hides is in the pane the row opens. */
+  .strip .branch { @apply min-w-0 overflow-hidden font-mono text-md font-semibold text-ellipsis whitespace-nowrap text-t1 }
   .strip[aria-selected="true"] .branch { @apply text-white }
   .strip[data-tone="base"] .branch { @apply font-normal text-t2 }
   .strip .said { @apply overflow-hidden text-ellipsis whitespace-nowrap text-base text-t2 }
@@ -489,6 +491,8 @@
   .sbody label.check { @apply my-2 flex cursor-pointer items-center gap-9 text-md font-normal text-t2 }
   .sheet .check input { @apply size-15 flex-none accent-danger }
   .note { @apply text-sm leading-[1.6] text-t3 }
+  /* The derived name in the new-work sheet: the one word on that line you came to read. */
+  .note .derived { @apply font-mono text-sm text-t1 [overflow-wrap:anywhere] }
   .row { @apply flex flex-wrap items-center gap-8 }
   .spacer { @apply flex-auto }
 

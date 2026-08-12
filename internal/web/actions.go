@@ -42,6 +42,19 @@ func handleNewWork(s *Server, p *project.Project, w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleNewPreview is the name new work would get, computed by the same code that
+// would create it, so the dialog can show it while you type.
+func handleNewPreview(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name   string `json:"name"`
+		Prompt string `json:"prompt"`
+	}
+	if !s.postJSON(w, r, &req) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"branch": p.Runner.PreviewName(req.Name, req.Prompt)})
+}
+
 // handleStack runs a configured container action.
 func handleStack(s *Server, p *project.Project, w http.ResponseWriter, r *http.Request) {
 	var req struct {

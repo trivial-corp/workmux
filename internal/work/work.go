@@ -74,7 +74,6 @@ type Item struct {
 	Agents    []agents.Agent `json:"agents"`
 	Sessions  []Session      `json:"sessions"`
 	Tempo     string         `json:"tempo"`
-	Rank      int            `json:"rank"`
 }
 
 // AgentCaps tells the UI what this project's agent can do, so it can offer what
@@ -266,14 +265,10 @@ func (b *Builder) Build() View {
 			Activity: lastActivity(w.Path, mine), Live: live,
 			Behind: behind, Ahead: ahead, Stack: st,
 			Agents: mine, Sessions: mySessions, Tempo: tempo,
-			Rank: rank(w.Path == root, tempo, live, st != nil, len(mine) > 0),
 		})
 	}
 
-	// Newest first inside each group: with 35 worktrees, "what did I touch" is how
-	// you find things again.
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Activity > items[j].Activity })
-	sort.SliceStable(items, func(i, j int) bool { return items[i].Rank < items[j].Rank })
+	sortWork(items)
 
 	// An open PR whose branch is already checked out somewhere isn't news.
 	var unchecked []prs.PR
@@ -307,8 +302,8 @@ func (b *Builder) Build() View {
 // Concurrently, because each project is a fistful of git and docker round trips and
 // they have no reason to wait for one another: three repos should cost what the
 // slowest one costs, not the sum. The ordering is then applied across the merged
-// list, so a blocked agent in one repo outranks a quiet worktree in another —
-// which is the whole reason for serving them together.
+// list, so the piece of work you touched last minute sits on top whichever repo it
+// is in — which is the whole reason for serving them together.
 func Merge(builders []*Builder, terminal bool, build string) Overview {
 	out := Overview{Projects: []Project{}, Work: []Item{}, Terminal: terminal, Build: build}
 	views := make([]View, len(builders))
@@ -325,9 +320,21 @@ func Merge(builders []*Builder, terminal bool, build string) Overview {
 		out.Projects = append(out.Projects, v.Project)
 		out.Work = append(out.Work, v.Work...)
 	}
-	sort.SliceStable(out.Work, func(i, j int) bool { return out.Work[i].Activity > out.Work[j].Activity })
-	sort.SliceStable(out.Work, func(i, j int) bool { return out.Work[i].Rank < out.Work[j].Rank })
+	sortWork(out.Work)
 	return out
+}
+
+// sortWork is the ordering the whole dashboard leans on: what you touched last,
+// newest first. Status — blocked, working, quiet — is a dot on the card, not an
+// ordering; sorting by it shuffled the list under you every time an agent changed
+// state, and "where was the one I was just in" beat "what wants me" every time.
+//
+// The base checkout still goes last however busy it looks: it's where you happen
+// to stand, not a change in flight, and ranking it by activity kept it pinned to
+// the top pretending to be work.
+func sortWork(items []Item) {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Activity > items[j].Activity })
+	sort.SliceStable(items, func(i, j int) bool { return !items[i].IsDefault && items[j].IsDefault })
 }
 
 type drift struct{ behind, ahead int }
@@ -357,28 +364,6 @@ func driftAll(trees []gitx.Worktree, byBranch map[string]prs.PR, base string) ma
 	}
 	wg.Wait()
 	return out
-}
-
-// rank is the ordering the whole dashboard leans on.
-//
-// The base checkout goes last however busy it looks: it's where you happen to
-// stand, not a change in flight, and ranking it by activity kept it pinned to the
-// top pretending to be work.
-func rank(isDefault bool, tempo string, live, hasStack, hasAgents bool) int {
-	switch {
-	case isDefault:
-		return 6
-	case tempo == "blocked":
-		return 0
-	case live || tempo == "active":
-		return 1
-	case hasStack:
-		return 2
-	case hasAgents:
-		return 3
-	default:
-		return 5
-	}
 }
 
 // lastActivity is when this work was last touched: the newest of its agents'
