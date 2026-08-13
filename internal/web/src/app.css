@@ -493,6 +493,8 @@
     font-family: inherit;
   }
   .sheet textarea { @apply min-h-92 resize-y font-sans }
+  /* An image being dragged over the task: say the drop will land. */
+  .sheet textarea.dropping { @apply border-accent ring-[3px] ring-accent/20 }
   .sheet label { @apply grid gap-6 text-sm font-medium text-t2 }
   /* Beats `.sheet input { width:100% }`, which turned a checkbox into a full-width
      box floating above its own label. */

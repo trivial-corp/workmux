@@ -7,7 +7,7 @@
      renders to a canvas, so there is no stylesheet to load. -->
 <!-- Tailwind, built from internal/web/src/app.css by `make css`. The name carries a
      hash of the contents, which is what makes it safe to cache forever. -->
-<link rel="stylesheet" href="/app.c9833509.css">
+<link rel="stylesheet" href="/app.09fe620d.css">
 
 <div id="loading"></div>
 <header>
@@ -1345,6 +1345,11 @@ function toggleFull() {
   if (p) { setTimeout(() => { p.fit.fit(); p.term.focus(); }, 0); }
 }
 
+// A drop that misses its target must not turn the dashboard into a file:// view —
+// the browser's default for a dropped file is to navigate to it.
+document.addEventListener("dragover", (e) => e.preventDefault());
+document.addEventListener("drop", (e) => e.preventDefault());
+
 // The terminal pastes text itself, so only images need handling here.
 $("term").addEventListener("paste", (e) => {
   const items = e.clipboardData && e.clipboardData.items;
@@ -1901,28 +1906,41 @@ function renderNew() {
 
   const go = el("button", "b on", "Create");
   const status = el("span", "meta", "");
-  // A pasted screenshot belongs here too: it's the same "here's what's wrong". The
-  // task text is what the agent is started with, so the image goes in as a path —
-  // there is no session yet whose clipboard could hold it.
-  ta.addEventListener("paste", (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    if (![...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) return;
-    e.preventDefault();
+  // A screenshot belongs here too: it's the same "here's what's wrong". The task
+  // text is what the agent is started with, so the image goes in as a path — there
+  // is no session yet whose clipboard could hold it. Pasted or dropped, same thing:
+  // both hand over a DataTransferItemList, so both go through the same door.
+  const insertPath = (path) => {
+    const at = ta.selectionStart ?? ta.value.length;
+    const before = ta.value.slice(0, at), after = ta.value.slice(at);
+    const text = (before && !/\s$/.test(before) ? " " : "") + path
+               + (after && !/\s/.test(after[0]) ? " " : "");
+    ta.value = before + text + after;
+    // Leave the caret after the path, or a second paste lands in front of the first
+    // and the two come out in the wrong order.
+    ta.setSelectionRange(at + text.length, at + text.length);
+    preview(); // setting .value fires no input event
+  };
+  const takeImages = (items) => {
+    if (!items || ![...items].some(i => i.kind === "file" && (i.type || "").startsWith("image/"))) return false;
     // An upload is a round trip, and a textarea that does nothing for a second reads
-    // as the paste having been swallowed — which is exactly what used to happen.
+    // as the image having been swallowed — which is exactly what used to happen.
     status.textContent = "uploading the image…";
-    pasteImages(items, (path) => {
-      const at = ta.selectionStart ?? ta.value.length;
-      const before = ta.value.slice(0, at), after = ta.value.slice(at);
-      const text = (before && !/\s$/.test(before) ? " " : "") + path
-                 + (after && !/\s/.test(after[0]) ? " " : "");
-      ta.value = before + text + after;
-      // Leave the caret after the path, or a second paste lands in front of the first
-      // and the two come out in the wrong order.
-      ta.setSelectionRange(at + text.length, at + text.length);
-      preview(); // setting .value fires no input event
-    }, true).finally(() => { status.textContent = ""; });
+    pasteImages(items, insertPath, true).finally(() => { status.textContent = ""; });
+    return true;
+  };
+  ta.addEventListener("paste", (e) => {
+    if (e.clipboardData && takeImages(e.clipboardData.items)) e.preventDefault();
+  });
+  // Drops land on the whole label, not just the textarea's box — aim doesn't matter.
+  // dragover must be cancelled too, or the browser never allows the drop at all and
+  // opens the file instead.
+  task.addEventListener("dragover", (e) => { e.preventDefault(); ta.classList.add("dropping"); });
+  task.addEventListener("dragleave", () => ta.classList.remove("dropping"));
+  task.addEventListener("drop", (e) => {
+    e.preventDefault();
+    ta.classList.remove("dropping");
+    if (e.dataTransfer) takeImages(e.dataTransfer.items);
   });
 
   go.onclick = async () => {
